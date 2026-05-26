@@ -1,5 +1,11 @@
 .vs
 .vscode
+
 build*/
 *.pyc
+
 CMakeSettings.json
+
+
+# wls identifier files
+*Zone.Identifier
