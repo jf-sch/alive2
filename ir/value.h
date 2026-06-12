@@ -134,4 +134,14 @@ public:
   static bool isUndefMask(const smt::expr &e);
 };
 
+
+
+class LambdaParam final : public Value {
+public:
+  LambdaParam(Type &type, std::string &&name) : Value(type, std::move(name)) {}
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override;
+  std::unique_ptr<LambdaParam> dup(const std::string &suffix) const;
+};
+
 }

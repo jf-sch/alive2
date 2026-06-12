@@ -290,4 +290,17 @@ expr Input::getUndefVar(const Type &ty, unsigned child) const {
   return expr::mkVar(tyname.c_str(), expr::mkUInt(0, 1));
 }
 
+
+
+void LambdaParam::print(std::ostream &os) const {
+  UNREACHABLE();
+}
+std::unique_ptr<LambdaParam> LambdaParam::dup(const string &suffix) const {
+  return make_unique<LambdaParam>(getType(), getName() + suffix);
+}
+StateValue LambdaParam::toSMT(State &s) const {
+  // TODO
+  return {};
+}
+
 }

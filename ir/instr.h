@@ -5,6 +5,7 @@
 
 #include "ir/attrs.h"
 #include "ir/value.h"
+#include "ir/constant.h"
 #include <string>
 #include <utility>
 #include <vector>
@@ -1334,4 +1335,84 @@ public:
 
 const ConversionOp *isCast(ConversionOp::Op op, const Value &v);
 Value *isNoOp(const Value &v);
+
+
+
+
+
+// arithmetic function without sideeffects (no function calls, memory ops, ...)
+class Lambda final {
+  IR::Type &type;
+  std::string name;
+
+  std::vector<std::unique_ptr<LambdaParam>> inputs;
+  std::vector<std::unique_ptr<Instr>> instrs;
+  std::unordered_set<const Value*> own_values;
+
+public:
+  Lambda(Type &type, std::string &&name) : type(type), name(std::move(name)) {};
+
+  const IR::Type& getType() const { return type; }
+  void setType(IR::Type &t) { type = t; }
+
+  const std::string& getName() const { return name; }
+  
+  LambdaParam &getInput(size_t idx) { return *inputs[idx]; }
+  util::const_strip_unique_ptr<decltype(inputs)> getInputs() const { return inputs; }
+  void addInput(std::unique_ptr<LambdaParam> &&i, bool push_front = false);
+  void delInput(const LambdaParam *i);
+
+  Instr &getInstr(size_t idx) { return *instrs[idx]; }
+  util::const_strip_unique_ptr<decltype(instrs)> getInstrs() const { return instrs; }
+  void addInstr(std::unique_ptr<Instr> &&i, bool push_front = false);
+  void addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before = true);
+  void delInstr(const Instr *i);
+
+  Return* getReturn();
+  using UsersTy = std::unordered_map<const Value*, std::set<Value*>>;
+  UsersTy getUsers() const;
+  std::vector<Value*> extern_operands() const;
+
+  smt::expr getTypeConstraints(const Function &f) const;
+  void fixupTypes(const smt::Model &m);
+  
+  void rauw(const Value &what, Value &with);
+  std::unique_ptr<Lambda> dup(Function &f, const std::string &suffix) const;
+  
+  StateValue toSMT(State &s) const;
+  friend std::ostream &operator<<(std::ostream &os, const Lambda &f);
+};
+
+
+
+class Map final : public MemInstr {
+  Value *ptr;
+  uint64_t align;
+  Value *start_idx, *stop_idx, *idx_step;
+  std::unique_ptr<Lambda> l;
+
+  public:
+  Map(Type &type, std::string &&name, Value &ptr, uint64_t align,
+      Value &start_idx, Value &stop_idx, Value &idx_step, std::unique_ptr<Lambda> &&l)
+      : MemInstr(type, "map" + std::move(name)), ptr(&ptr), align(align),
+      start_idx(&start_idx), stop_idx(&stop_idx), idx_step(&idx_step), l(std::move(l)) {}
+
+  Value& getPtr() const { return *ptr; }
+  uint64_t getAlign() const { return align; }
+  void setAlign(uint64_t align) { this->align = align; }
+
+  std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
+  uint64_t getMaxAccessSize() const override;
+  uint64_t getMaxGEPOffset() const override;
+  ByteAccessInfo getByteAccessInfo() const override;
+
+  std::vector<Value*> operands() const override;
+  bool propagatesPoison() const override { return true; };
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override;
+  smt::expr getTypeConstraints(const Function &f) const override;
+  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+};
+
 }

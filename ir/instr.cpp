@@ -4,6 +4,7 @@
 #include "ir/instr.h"
 #include "ir/function.h"
 #include "ir/globals.h"
+#include "ir/constant.h"
 #include "ir/type.h"
 #include "smt/expr.h"
 #include "smt/exprs.h"
@@ -5146,4 +5147,188 @@ Value* isNoOp(const Value &v) {
 
   return nullptr;
 }
+
+
+
+
+
+void Lambda::addInput(std::unique_ptr<LambdaParam> &&i, bool push_front) {
+  own_values.insert(i.get());
+  if (push_front) {
+    inputs.emplace(inputs.begin(), std::move(i));
+  } else {
+    inputs.emplace_back(std::move(i));
+  }
+}
+void Lambda::delInput(const LambdaParam *i) {
+  for (auto I = inputs.begin(), E = inputs.end(); I != E; ++I) {
+    if (I->get() == i) {
+      inputs.erase(I);
+      own_values.erase(i);
+      return;
+    }
+  }
+}
+
+void Lambda::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
+  own_values.insert(i.get());
+  if (push_front) {
+    instrs.emplace(instrs.begin(), std::move(i));
+  } else {
+    instrs.emplace_back(std::move(i));
+  }
+}
+void Lambda::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
+  own_values.insert(i.get());
+  for (auto I = instrs.begin(); true; ++I) {
+    assert(I != instrs.end());
+    if (I->get() == other) {
+      if (!before) {
+        ++I;
+      }
+      instrs.emplace(I, std::move(i));
+      break;
+    }
+  }
+}
+void Lambda::delInstr(const Instr *i) {
+  for (auto I = instrs.begin(), E = instrs.end(); I != E; ++I) {
+    if (I->get() == i) {
+      instrs.erase(I);
+      own_values.erase(i);
+      return;
+    }
+  }
+}
+
+Return* Lambda::getReturn() {
+  for (auto &I : instrs) {
+    if (auto ret = dynamic_cast<Return*>(I.get())) {
+      return ret;
+    }
+  }
+  return nullptr;
+}
+
+Lambda::UsersTy Lambda::getUsers() const {
+  UsersTy users;
+  for (auto &I : instrs) {
+    for (auto op : I->operands()) {
+      if (I.get() != op) {
+        users[op].emplace(I.get());
+      }
+    }
+  }
+  return users;
+}
+
+std::vector<Value*> Lambda::extern_operands() const {
+  std::vector<Value*> extern_ops;
+  for (auto &I : instrs) {
+    for (auto op : I->operands()) {
+      if (!own_values.contains(op)) {
+        extern_ops.emplace_back(op);
+      }
+    }
+  }
+  return extern_ops;
+}
+
+expr Lambda::getTypeConstraints(const Function &f) const {
+  expr t(true);
+  for (auto &i : instrs) {
+    t &= i->getTypeConstraints(f);
+  }
+  return t;
+}
+
+void Lambda::fixupTypes(const Model &m) {
+  for (auto &i : instrs) {
+    i->fixupTypes(m);
+  }
+}
+
+void Lambda::rauw(const Value &what, Value &with) {
+  for (auto &i : instrs) {
+    i->rauw(what, with);
+  }
+}
+
+unique_ptr<Lambda> Lambda::dup(Function &f, const string &suffix) const {
+  auto newl = make_unique<Lambda>(type, name + suffix);
+  for (auto &i : inputs) {
+    newl->addInput(i->dup(suffix));
+  }
+  for (auto &i : instrs) {
+    newl->addInstr(i->dup(f, suffix));
+  }
+  return newl;
+}
+
+StateValue Lambda::toSMT(State &s) const {
+  // TODO
+  return {};
+}
+
+ostream& operator<<(ostream &os, const Lambda &l) {
+  if (!l.name.empty()) {
+    os << string_view(l.name).substr(1) << ":\n";
+  }
+  for (auto &i : l.getInstrs()) {
+    os << "  ";
+    i.print(os);
+    os << '\n';
+  }
+  return os;
+}
+
+
+
+DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
+DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
+
+uint64_t Map::getMaxAccessSize() const {
+  return round_up(Memory::getStoreByteSize(l->getType()), align);
+}
+
+MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
+  return ByteAccessInfo::get(l->getType(), true, align);
+}
+
+std::vector<Value*> Map::operands() const {
+  auto ops = l->extern_operands();
+  for (auto op : {ptr, start_idx, stop_idx, idx_step}) {
+    ops.emplace_back(op);
+  }
+  return ops;
+}
+
+void Map::rauw(const Value &what, Value &with) {
+  l->rauw(what, with);
+  for (auto op : {ptr, start_idx, stop_idx, idx_step}) {
+    RAUW(op);
+  }
+}
+
+void Map::print(ostream &os) const {
+  os << "map " << *ptr << " align " << align << " [" << *start_idx << ':' << *stop_idx << ':' << *idx_step << "]\n" << l.get();
+}
+
+StateValue Map::toSMT(State &s) const {
+  // TODO
+  return {};
+}
+
+expr Map::getTypeConstraints(const Function &f) const {
+  expr t = l->getTypeConstraints(f) && ptr->getType().enforcePtrType();
+  for (auto op : {start_idx, stop_idx, idx_step}) {
+    t &= op->getType().enforceIntType();
+  }
+  return t;
+}
+
+unique_ptr<Instr> Map::dup(Function &f, const string &suffix) const {
+  return make_unique<Map>(getType(), getName() + suffix, *ptr, align, *start_idx, *stop_idx, *idx_step, l->dup(f, suffix));
+}
+
 }
