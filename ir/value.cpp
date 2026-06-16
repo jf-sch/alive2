@@ -293,10 +293,7 @@ expr Input::getUndefVar(const Type &ty, unsigned child) const {
 
 
 void InlineFuncParam::print(std::ostream &os) const {
-  UNREACHABLE();
-}
-StateValue InlineFuncParam::toSMT(State &s) const {
-  UNREACHABLE();
+  os << getType() << ' ' << getName();
 }
 std::unique_ptr<InlineFuncParam> InlineFuncParam::dup(const string &suffix) const {
   return make_unique<InlineFuncParam>(getType(), getName() + suffix);

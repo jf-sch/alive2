@@ -5234,6 +5234,21 @@ std::vector<Value*> InlineFunc::extern_operands() const {
   return extern_ops;
 }
 
+bool InlineFunc::propagatesPoison() const {
+  bool poison = false;
+  for (auto &i : instrs) {
+    poison = poison && i->propagatesPoison();
+  }
+  return poison;
+}
+bool InlineFunc::hasSideEffects() const {
+  bool side_effects = false;
+  for (auto &i : instrs) {
+    side_effects = side_effects && i->hasSideEffects();
+  }
+  return side_effects;
+}
+
 void InlineFunc::rauw(const Value &what, Value &with) {
   for (auto &i : instrs) {
     i->rauw(what, with);
@@ -5253,13 +5268,24 @@ unique_ptr<InlineFunc> InlineFunc::dup(Function &f, const string &suffix) const 
 
 ostream& operator<<(ostream &os, const InlineFunc &map_arr_elem) {
   if (!map_arr_elem.name.empty()) {
-    os << string_view(map_arr_elem.name).substr(1) << ":\n";
+    os << string_view(map_arr_elem.name).substr(1) << '(';
   }
+  auto params = map_arr_elem.getParams();
+  auto I = params.begin(), E = params.end();
+  if (I != E) {
+    (*I).print(os);
+  }
+  for (; I != E; ++I) {
+    os << ", ";
+    (*I).print(os);
+  }
+  os << ") {\n";
   for (auto &i : map_arr_elem.getInstrs()) {
     os << "  ";
     i.print(os);
     os << '\n';
   }
+  os << "}";
   return os;
 }
 

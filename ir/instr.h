@@ -1373,6 +1373,9 @@ public:
   UsersTy getUsers() const;
   std::vector<Value*> extern_operands() const;
 
+  bool propagatesPoison() const;
+  bool hasSideEffects() const;
+
   void rauw(const Value &what, Value &with);
   std::unique_ptr<InlineFunc> dup(Function &f, const std::string &suffix) const;
 
@@ -1395,7 +1398,6 @@ class Map final : public MemInstr {
 
   Value& getPtr() const { return *ptr; }
   uint64_t getAlign() const { return align; }
-  void setAlign(uint64_t align) { this->align = align; }
 
   std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
   uint64_t getMaxAccessSize() const override;
@@ -1403,7 +1405,7 @@ class Map final : public MemInstr {
   ByteAccessInfo getByteAccessInfo() const override;
 
   std::vector<Value*> operands() const override;
-  bool propagatesPoison() const override { return true; };
+  bool propagatesPoison() const override { return true; }
   void rauw(const Value &what, Value &with) override;
   void print(std::ostream &os) const override;
   StateValue toSMT(State &s) const override;

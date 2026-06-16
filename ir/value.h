@@ -140,7 +140,7 @@ class InlineFuncParam final : public Value {
 public:
   InlineFuncParam(Type &type, std::string &&name) : Value(type, std::move(name)) {}
   void print(std::ostream &os) const override;
-  StateValue toSMT(State &s) const override;
+  StateValue toSMT(State &s) const override { UNREACHABLE(); }
   std::unique_ptr<InlineFuncParam> dup(const std::string &suffix) const;
 };
 
