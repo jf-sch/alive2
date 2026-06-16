@@ -292,15 +292,14 @@ expr Input::getUndefVar(const Type &ty, unsigned child) const {
 
 
 
-void LambdaParam::print(std::ostream &os) const {
+void InlineFuncParam::print(std::ostream &os) const {
   UNREACHABLE();
 }
-std::unique_ptr<LambdaParam> LambdaParam::dup(const string &suffix) const {
-  return make_unique<LambdaParam>(getType(), getName() + suffix);
+StateValue InlineFuncParam::toSMT(State &s) const {
+  UNREACHABLE();
 }
-StateValue LambdaParam::toSMT(State &s) const {
-  // TODO
-  return {};
+std::unique_ptr<InlineFuncParam> InlineFuncParam::dup(const string &suffix) const {
+  return make_unique<InlineFuncParam>(getType(), getName() + suffix);
 }
 
 }

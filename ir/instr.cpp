@@ -5152,25 +5152,25 @@ Value* isNoOp(const Value &v) {
 
 
 
-void Lambda::addInput(std::unique_ptr<LambdaParam> &&i, bool push_front) {
+void InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
-    inputs.emplace(inputs.begin(), std::move(i));
+    params.emplace(params.begin(), std::move(i));
   } else {
-    inputs.emplace_back(std::move(i));
+    params.emplace_back(std::move(i));
   }
 }
-void Lambda::delInput(const LambdaParam *i) {
-  for (auto I = inputs.begin(), E = inputs.end(); I != E; ++I) {
+void InlineFunc::delParam(const InlineFuncParam *i) {
+  for (auto I = params.begin(), E = params.end(); I != E; ++I) {
     if (I->get() == i) {
-      inputs.erase(I);
+      params.erase(I);
       own_values.erase(i);
       return;
     }
   }
 }
 
-void Lambda::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
+void InlineFunc::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
     instrs.emplace(instrs.begin(), std::move(i));
@@ -5178,7 +5178,7 @@ void Lambda::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
     instrs.emplace_back(std::move(i));
   }
 }
-void Lambda::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
+void InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
   own_values.insert(i.get());
   for (auto I = instrs.begin(); true; ++I) {
     assert(I != instrs.end());
@@ -5191,7 +5191,7 @@ void Lambda::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool bef
     }
   }
 }
-void Lambda::delInstr(const Instr *i) {
+void InlineFunc::delInstr(const Instr *i) {
   for (auto I = instrs.begin(), E = instrs.end(); I != E; ++I) {
     if (I->get() == i) {
       instrs.erase(I);
@@ -5201,7 +5201,7 @@ void Lambda::delInstr(const Instr *i) {
   }
 }
 
-Return* Lambda::getReturn() {
+Return* InlineFunc::getReturn() {
   for (auto &I : instrs) {
     if (auto ret = dynamic_cast<Return*>(I.get())) {
       return ret;
@@ -5210,7 +5210,7 @@ Return* Lambda::getReturn() {
   return nullptr;
 }
 
-Lambda::UsersTy Lambda::getUsers() const {
+InlineFunc::UsersTy InlineFunc::getUsers() const {
   UsersTy users;
   for (auto &I : instrs) {
     for (auto op : I->operands()) {
@@ -5222,7 +5222,7 @@ Lambda::UsersTy Lambda::getUsers() const {
   return users;
 }
 
-std::vector<Value*> Lambda::extern_operands() const {
+std::vector<Value*> InlineFunc::extern_operands() const {
   std::vector<Value*> extern_ops;
   for (auto &I : instrs) {
     for (auto op : I->operands()) {
@@ -5234,30 +5234,16 @@ std::vector<Value*> Lambda::extern_operands() const {
   return extern_ops;
 }
 
-expr Lambda::getTypeConstraints(const Function &f) const {
-  expr t(true);
-  for (auto &i : instrs) {
-    t &= i->getTypeConstraints(f);
-  }
-  return t;
-}
-
-void Lambda::fixupTypes(const Model &m) {
-  for (auto &i : instrs) {
-    i->fixupTypes(m);
-  }
-}
-
-void Lambda::rauw(const Value &what, Value &with) {
+void InlineFunc::rauw(const Value &what, Value &with) {
   for (auto &i : instrs) {
     i->rauw(what, with);
   }
 }
 
-unique_ptr<Lambda> Lambda::dup(Function &f, const string &suffix) const {
-  auto newl = make_unique<Lambda>(type, name + suffix);
-  for (auto &i : inputs) {
-    newl->addInput(i->dup(suffix));
+unique_ptr<InlineFunc> InlineFunc::dup(Function &f, const string &suffix) const {
+  auto newl = make_unique<InlineFunc>(type, name + suffix);
+  for (auto &i : params) {
+    newl->addParam(i->dup(suffix));
   }
   for (auto &i : instrs) {
     newl->addInstr(i->dup(f, suffix));
@@ -5265,16 +5251,11 @@ unique_ptr<Lambda> Lambda::dup(Function &f, const string &suffix) const {
   return newl;
 }
 
-StateValue Lambda::toSMT(State &s) const {
-  // TODO
-  return {};
-}
-
-ostream& operator<<(ostream &os, const Lambda &l) {
-  if (!l.name.empty()) {
-    os << string_view(l.name).substr(1) << ":\n";
+ostream& operator<<(ostream &os, const InlineFunc &map_arr_elem) {
+  if (!map_arr_elem.name.empty()) {
+    os << string_view(map_arr_elem.name).substr(1) << ":\n";
   }
-  for (auto &i : l.getInstrs()) {
+  for (auto &i : map_arr_elem.getInstrs()) {
     os << "  ";
     i.print(os);
     os << '\n';
@@ -5287,16 +5268,29 @@ ostream& operator<<(ostream &os, const Lambda &l) {
 DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
 DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
 
+IntType Map::arr_idx_type("arr_idx_type");
+
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &type) {
+  auto lambda = make_unique<InlineFunc>(type, "map_arr_elem");
+  lambda->addParam(make_unique<InlineFuncParam>(type, "elem"));
+  lambda->addParam(make_unique<InlineFuncParam>(arr_idx_type, "idx"));
+  return lambda;
+}
+
+Map::Map(Value &ptr, uint64_t align, Value &start_idx, Value &stop_idx, Value &idx_step, std::unique_ptr<InlineFunc> &&lambda)
+  : MemInstr(Type::voidTy, "map"), ptr(&ptr), align(align), 
+    start_idx(&start_idx), stop_idx(&stop_idx), idx_step(&idx_step), map_arr_elem(std::move(lambda)) {}
+
 uint64_t Map::getMaxAccessSize() const {
-  return round_up(Memory::getStoreByteSize(l->getType()), align);
+  return round_up(Memory::getStoreByteSize(map_arr_elem->getType()), align);
 }
 
 MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
-  return ByteAccessInfo::get(l->getType(), true, align);
+  return ByteAccessInfo::get(map_arr_elem->getType(), true, align);
 }
 
 std::vector<Value*> Map::operands() const {
-  auto ops = l->extern_operands();
+  auto ops = map_arr_elem->extern_operands();
   for (auto op : {ptr, start_idx, stop_idx, idx_step}) {
     ops.emplace_back(op);
   }
@@ -5304,14 +5298,14 @@ std::vector<Value*> Map::operands() const {
 }
 
 void Map::rauw(const Value &what, Value &with) {
-  l->rauw(what, with);
+  map_arr_elem->rauw(what, with);
   for (auto op : {ptr, start_idx, stop_idx, idx_step}) {
     RAUW(op);
   }
 }
 
 void Map::print(ostream &os) const {
-  os << "map " << *ptr << " align " << align << " [" << *start_idx << ':' << *stop_idx << ':' << *idx_step << "]\n" << l.get();
+  os << "map " << *ptr << " align " << align << " [" << *start_idx << ':' << *stop_idx << ':' << *idx_step << "]\n" << map_arr_elem.get();
 }
 
 StateValue Map::toSMT(State &s) const {
@@ -5320,7 +5314,7 @@ StateValue Map::toSMT(State &s) const {
 }
 
 expr Map::getTypeConstraints(const Function &f) const {
-  expr t = l->getTypeConstraints(f) && ptr->getType().enforcePtrType();
+  expr t = ptr->getType().enforcePtrType();
   for (auto op : {start_idx, stop_idx, idx_step}) {
     t &= op->getType().enforceIntType();
   }
@@ -5328,7 +5322,7 @@ expr Map::getTypeConstraints(const Function &f) const {
 }
 
 unique_ptr<Instr> Map::dup(Function &f, const string &suffix) const {
-  return make_unique<Map>(getType(), getName() + suffix, *ptr, align, *start_idx, *stop_idx, *idx_step, l->dup(f, suffix));
+  return make_unique<Map>(*ptr, align, *start_idx, *stop_idx, *idx_step, map_arr_elem->dup(f, suffix));
 }
 
 }

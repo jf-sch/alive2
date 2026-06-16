@@ -1340,27 +1340,27 @@ Value *isNoOp(const Value &v);
 
 
 
-// arithmetic function without sideeffects (no function calls, memory ops, ...)
-class Lambda final {
+// strait line function to be inlined (no branches)
+class InlineFunc final {
   IR::Type &type;
   std::string name;
 
-  std::vector<std::unique_ptr<LambdaParam>> inputs;
+  std::vector<std::unique_ptr<InlineFuncParam>> params;
   std::vector<std::unique_ptr<Instr>> instrs;
   std::unordered_set<const Value*> own_values;
 
 public:
-  Lambda(Type &type, std::string &&name) : type(type), name(std::move(name)) {};
+  InlineFunc(Type &type, std::string &&name = "lambda")
+    : type(type), name(std::move(name)), params(std::move(params)) {};
 
-  const IR::Type& getType() const { return type; }
-  void setType(IR::Type &t) { type = t; }
+  auto& getType() const { return type; }
+  auto& getName() const { return name; }
 
-  const std::string& getName() const { return name; }
-  
-  LambdaParam &getInput(size_t idx) { return *inputs[idx]; }
-  util::const_strip_unique_ptr<decltype(inputs)> getInputs() const { return inputs; }
-  void addInput(std::unique_ptr<LambdaParam> &&i, bool push_front = false);
-  void delInput(const LambdaParam *i);
+  size_t numParams() const { return params.size(); }
+  InlineFuncParam &getParam(size_t idx) { return *params[idx]; }
+  util::const_strip_unique_ptr<decltype(params)> getParams() const { return params; }
+  void addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front = false);
+  void delParam(const InlineFuncParam *i);
 
   Instr &getInstr(size_t idx) { return *instrs[idx]; }
   util::const_strip_unique_ptr<decltype(instrs)> getInstrs() const { return instrs; }
@@ -1373,14 +1373,10 @@ public:
   UsersTy getUsers() const;
   std::vector<Value*> extern_operands() const;
 
-  smt::expr getTypeConstraints(const Function &f) const;
-  void fixupTypes(const smt::Model &m);
-  
   void rauw(const Value &what, Value &with);
-  std::unique_ptr<Lambda> dup(Function &f, const std::string &suffix) const;
-  
-  StateValue toSMT(State &s) const;
-  friend std::ostream &operator<<(std::ostream &os, const Lambda &f);
+  std::unique_ptr<InlineFunc> dup(Function &f, const std::string &suffix) const;
+
+  friend std::ostream &operator<<(std::ostream &os, const InlineFunc &f);
 };
 
 
@@ -1389,13 +1385,13 @@ class Map final : public MemInstr {
   Value *ptr;
   uint64_t align;
   Value *start_idx, *stop_idx, *idx_step;
-  std::unique_ptr<Lambda> l;
+  std::unique_ptr<InlineFunc> map_arr_elem;
 
   public:
-  Map(Type &type, std::string &&name, Value &ptr, uint64_t align,
-      Value &start_idx, Value &stop_idx, Value &idx_step, std::unique_ptr<Lambda> &&l)
-      : MemInstr(type, "map" + std::move(name)), ptr(&ptr), align(align),
-      start_idx(&start_idx), stop_idx(&stop_idx), idx_step(&idx_step), l(std::move(l)) {}
+  static IntType arr_idx_type;
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
+
+  Map(Value &ptr, uint64_t align, Value &start_idx, Value &stop_idx, Value &idx_step, std::unique_ptr<InlineFunc> &&lambda);
 
   Value& getPtr() const { return *ptr; }
   uint64_t getAlign() const { return align; }
