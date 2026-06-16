@@ -1384,6 +1384,33 @@ public:
 
 
 
+class InlineFuncCall final : public Instr {
+  std::vector<Value*> args;
+  InlineFunc& func;
+  std::unique_ptr<InlineFunc> func_obj;
+
+public:
+  InlineFuncCall(std::string &&name, std::vector<Value*>&& args, InlineFunc& func)
+    : Instr(func.getType(), std::move(name)), args(std::move(args)), func(func) {
+    assert(this->func.numParams() == args.size());
+  }
+  InlineFuncCall(std::string &&name, std::vector<Value*>&& args, std::unique_ptr<InlineFunc> &&func)
+    : Instr(func->getType(), std::move(name)), args(std::move(args)), func(*func.get()), func_obj(std::move(func)) {
+    assert(this->func.numParams() == args.size());
+  }
+
+  std::vector<Value*> operands() const override;
+  bool propagatesPoison() const override { return func.propagatesPoison(); };
+  bool hasSideEffects() const override { return func.hasSideEffects(); }
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override { UNREACHABLE(); }
+  smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
+  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+};
+
+
+
 class Map final : public MemInstr {
   Value *ptr;
   uint64_t align;

@@ -5291,6 +5291,40 @@ ostream& operator<<(ostream &os, const InlineFunc &map_arr_elem) {
 
 
 
+std::vector<Value*> InlineFuncCall::operands() const {
+  auto ops = func.extern_operands();
+  for (auto op : args) {
+    ops.emplace_back(op);
+  }
+  return ops;
+}
+void InlineFuncCall::rauw(const Value &what, Value &with) {
+  func.rauw(what, with);
+  for (auto op : args) {
+    RAUW(op);
+  }
+}
+void InlineFuncCall::print(std::ostream &os) const {
+  os << "inline_func_call " << getName() << '('; 
+  auto I = args.begin(), E = args.end();
+  if (I != E) {
+    (*I)->print(os);
+  }
+  for (; I != E; ++I) {
+    os << ", ";
+    (*I)->print(os);
+  }
+  os << ")\n" << func;
+}
+std::unique_ptr<Instr> InlineFuncCall::dup(Function &f, const std::string &suffix) const {
+  if (func_obj == nullptr) {
+    return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), func);
+  }
+  return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), func_obj->dup(f, suffix));
+}
+
+
+
 DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
 DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
 
