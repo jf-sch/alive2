@@ -116,6 +116,36 @@ void BasicBlock::rauw(const Value &what, Value &with) {
   }
 }
 
+void BasicBlock::expandInlineFunc(Function &f, InlineFuncCall& call) {
+  auto call_pos = m_instrs.begin();
+  for (;; ++call_pos) {
+    assert(call_pos != m_instrs.end());
+    if (call_pos->get() == &call) {
+      break;
+    }
+  }
+  const std::string suffix = call.getName();
+  auto& func = call.getFunc();
+  assert(call.numArgs() == func.numParams());
+  auto func_instrs = func.cloneInstrs(f, suffix);
+
+  for (auto &I: func_instrs) {
+    for (size_t i = 0; i < call.numArgs(); i++) {
+      I->rauw(func.paramAt(i), call.argAt(i));
+    }
+  }
+  auto I = func_instrs.begin(), E = func_instrs.end();
+  for (; I != E && dynamic_cast<const Return*>((*I).get()) == nullptr; ++I) {
+    assert(dynamic_cast<const JumpInstr*>((*I).get()) == nullptr);
+    call_pos = ++m_instrs.emplace(call_pos, std::move(*I));
+  }
+  auto ret = dynamic_cast<const Return*>((*I).get());
+  if (I != E && ret != nullptr) {
+    rauw(call, ret->getVal());
+  }
+  m_instrs.erase(call_pos);
+}
+
 ostream& operator<<(ostream &os, const BasicBlock &bb) {
   if (!bb.name.empty())
     os << string_view(bb.name).substr(1) << ":\n";

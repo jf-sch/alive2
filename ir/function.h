@@ -70,6 +70,7 @@ public:
 
   std::unique_ptr<BasicBlock> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
+  void expandInlineFunc(Function &f, InlineFuncCall& call);
 
   friend std::ostream& operator<<(std::ostream &os, const BasicBlock &bb);
 };
