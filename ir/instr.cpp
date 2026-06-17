@@ -5201,7 +5201,7 @@ void InlineFunc::delInstr(const Instr *i) {
   }
 }
 
-Return* InlineFunc::getReturn() {
+Return* InlineFunc::getReturn() const {
   for (auto &I : instrs) {
     if (auto ret = dynamic_cast<Return*>(I.get())) {
       return ret;
@@ -5209,7 +5209,7 @@ Return* InlineFunc::getReturn() {
   }
   return nullptr;
 }
-Type& InlineFunc::getReturnType() {
+Type& InlineFunc::getReturnType() const {
   auto ret_val = getReturn();
   return (ret_val != nullptr) ? ret_val->getType() : Type::voidTy;
 }
@@ -5225,16 +5225,16 @@ InlineFunc::UsersTy InlineFunc::getUsers() const {
   }
   return users;
 }
-std::vector<Value*> InlineFunc::extern_operands() const {
-  std::vector<Value*> extern_ops;
+std::vector<Value*> InlineFunc::operands() const {
+  std::vector<Value*> ops;
   for (auto &I : instrs) {
     for (auto op : I->operands()) {
       if (!own_values.contains(op)) {
-        extern_ops.emplace_back(op);
+        ops.emplace_back(op);
       }
     }
   }
-  return extern_ops;
+  return ops;
 }
 
 bool InlineFunc::propagatesPoison() const {
@@ -5257,57 +5257,73 @@ void InlineFunc::rauw(const Value &what, Value &with) {
     i->rauw(what, with);
   }
 }
-unique_ptr<InlineFunc> InlineFunc::dup(Function &f, const string &suffix) const {
-  auto new_func = make_unique<InlineFunc>(type, name + suffix);
-  for (auto &i : params) {
-    new_func->addParam(i->dup(suffix));
-  }
-  for (auto &i : instrs) {
-    new_func->addInstr(i->dup(f, suffix));
-  }
-  return new_func;
-}
-
-ostream& operator<<(ostream &os, const InlineFunc &func) {
-  if (!func.getName().empty()) {
-    os << string_view(func.getName()).substr(1) << '(';
-  }
-  auto params = func.getParams();
+void InlineFunc::print(std::ostream &os) const {
+  os << "inline_func_decl " << getType() << ' ' << getName() << '(';
   auto I = params.begin(), E = params.end();
   if (I != E) {
-    (*I).print(os);
+    (*I)->print(os);
   }
   for (; I != E; ++I) {
     os << ", ";
-    (*I).print(os);
+    (*I)->print(os);
   }
   os << ") {\n";
-  for (auto &i : func.getInstrs()) {
+  for (auto &i : instrs) {
     os << "  ";
-    i.print(os);
+    i->print(os);
     os << '\n';
   }
   os << "}";
-  return os;
+}
+
+std::vector<std::unique_ptr<Instr>> InlineFunc::cloneInstrs(Function &f, const std::string &suffix) const {
+  std::vector<std::unique_ptr<Instr>> instrs_cpy;
+  for (auto &i : instrs) {
+    instrs_cpy.emplace_back(i->dup(f, suffix));
+  }
+  for (auto &I : instrs) {
+    for (size_t i = 0; i < numInstrs(); i++) {
+      I->rauw(instrAt(i), *instrs_cpy[i]);
+    }
+  }
+  return instrs_cpy;
+}
+std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
+  auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
+  for (auto &i : params) {
+    new_func->addParam(i->dup(suffix));
+  }
+  auto new_instrs = cloneInstrs(f, suffix);
+  for (auto &i : new_instrs) {
+    new_func->addInstr(std::move(i));
+  }
+  for (size_t i = 0; i < numParams(); i++) {
+    new_func->rauw(paramAt(i), new_func->paramAt(i));
+  }
+  return new_func;
 }
 
 
 
 std::vector<Value*> InlineFuncCall::operands() const {
-  auto ops = func->extern_operands();
+  std::vector<Value*> ops = {func};
   for (auto op : args) {
     ops.emplace_back(op);
   }
   return ops;
 }
 void InlineFuncCall::rauw(const Value &what, Value &with) {
-  func->rauw(what, with);
+  if (func == &what) {
+    auto new_func = dynamic_cast<InlineFunc*>(&with);
+    assert(new_func != nullptr);
+    func = new_func;
+  }
   for (auto op : args) {
     RAUW(op);
   }
 }
 void InlineFuncCall::print(std::ostream &os) const {
-  os << "inline_func_call " << getName() << '(';
+  os << "inline_func_call " << getName() << " = " << func->getName() << '(';
   auto I = args.begin(), E = args.end();
   if (I != E) {
     (*I)->print(os);
@@ -5316,13 +5332,10 @@ void InlineFuncCall::print(std::ostream &os) const {
     os << ", ";
     (*I)->print(os);
   }
-  os << ")\n" << *func;
+  os << ")";
 }
 std::unique_ptr<Instr> InlineFuncCall::dup(Function &f, const std::string &suffix) const {
-  if (func_obj == nullptr) {
-    return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), *func);
-  }
-  return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), func_obj->dup(f, suffix));
+  return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), *func);
 }
 
 
@@ -5348,7 +5361,7 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
 }
 
 std::vector<Value*> Map::operands() const {
-  auto ops = map_arr_elem->extern_operands();
+  std::vector<Value*> ops = {map_arr_elem};
   for (auto op : {ptr, stop_idx}) {
     ops.emplace_back(op);
   }
@@ -5356,15 +5369,18 @@ std::vector<Value*> Map::operands() const {
 }
 
 void Map::rauw(const Value &what, Value &with) {
-  map_arr_elem->rauw(what, with);
-  load_arr_idx->rauw(what, with);
+  if (map_arr_elem == &what) {
+    auto new_lambda = dynamic_cast<InlineFunc*>(&with);
+    assert(new_lambda != nullptr);
+    map_arr_elem = new_lambda;
+  }
   for (auto op : {ptr, stop_idx}) {
     RAUW(op);
   }
 }
 
 void Map::print(ostream &os) const {
-  os << "map " << *ptr << " align " << align << " [" << '0' << ':' << *stop_idx << ':' << '1' << "]\n" << *map_arr_elem;
+  os << "map " << *ptr << " align " << align << " [" << '0' << ':' << *stop_idx << ':' << '1' << "]\n " << map_arr_elem->getName();
 }
 
 StateValue Map::toSMT(State &s) const {
@@ -5380,8 +5396,8 @@ expr Map::getTypeConstraints(const Function &f) const {
   return t;
 }
 
-unique_ptr<Instr> Map::dup(Function &f, const string &suffix) const {
-  return make_unique<Map>(*ptr, align, *stop_idx, map_arr_elem->dup(f, suffix));
+unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
+  return make_unique<Map>(*ptr, align, *stop_idx, *map_arr_elem);
 }
 
 }

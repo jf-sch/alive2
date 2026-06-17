@@ -1343,20 +1343,14 @@ Value *isNoOp(const Value &v);
 
 
 // strait line function to be inlined (no branches)
-class InlineFunc final {
-  IR::Type &type;
-  std::string name;
-
+class InlineFunc final : public Instr {
   std::vector<std::unique_ptr<InlineFuncParam>> params;
   std::vector<std::unique_ptr<Instr>> instrs;
   std::unordered_set<const Value*> own_values;
 
 public:
   InlineFunc(Type &type, std::string &&name)
-    : type(type), name(std::move(name)), params(std::move(params)) {};
-
-  auto& getType() const { return type; }
-  auto& getName() const { return name; }
+    : Instr(type, std::move(name)) {};
 
   size_t numParams() const { return params.size(); }
   InlineFuncParam &paramAt(size_t idx, bool reversed = false) const { return *params.at(reversed ? (instrs.size() - idx - 1) : idx); }
@@ -1372,19 +1366,21 @@ public:
   void addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before = true);
   void delInstr(const Instr *i);
 
-  Return* getReturn();
-  Type& getReturnType();
+  Return* getReturn() const;
+  Type& getReturnType() const;
   using UsersTy = std::unordered_map<const Value*, std::set<Value*>>;
   UsersTy getUsers() const;
-  std::vector<Value*> extern_operands() const;
+  std::vector<Value*> operands() const override;
 
-  bool propagatesPoison() const;
-  bool hasSideEffects() const;
+  bool propagatesPoison() const override;
+  bool hasSideEffects() const override;
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
 
-  void rauw(const Value &what, Value &with);
-  std::unique_ptr<InlineFunc> dup(Function &f, const std::string &suffix) const;
-
-  friend std::ostream &operator<<(std::ostream &os, const InlineFunc &f);
+  StateValue toSMT(State &s) const override { UNREACHABLE(); }
+  smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
+  std::vector<std::unique_ptr<Instr>> cloneInstrs(Function &f, const std::string &suffix) const;
+  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
 };
 
 
@@ -1392,13 +1388,10 @@ public:
 class InlineFuncCall final : public Instr {
   std::vector<Value*> args;
   InlineFunc* func;
-  std::unique_ptr<InlineFunc> func_obj;
 
 public:
   InlineFuncCall(std::string &&name, std::vector<Value*>&& args, InlineFunc& func)
     : Instr(func.getType(), std::move(name)), args(std::move(args)), func(&func) {}
-  InlineFuncCall(std::string &&name, std::vector<Value*>&& args, std::unique_ptr<InlineFunc> &&func)
-    : Instr(func->getType(), std::move(name)), args(std::move(args)), func(func.get()), func_obj(std::move(func)) {}
 
   const auto& getFunc() const { return *func; };
   size_t numArgs() const { return args.size(); };
@@ -1422,7 +1415,7 @@ class Map final : public MemInstr {
   Value *ptr;
   uint64_t align;
   Value *stop_idx;    // start_idx = 0, idx_step = 1
-  std::unique_ptr<InlineFunc> map_arr_elem;
+  InlineFunc* map_arr_elem;
 
   std::unique_ptr<InlineFunc> make_func_load_arr_idx(InlineFunc& map_arr_elem);
 
@@ -1430,9 +1423,9 @@ class Map final : public MemInstr {
   static IntType arr_idx_type;
   static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
 
-  Map(Value &ptr, uint64_t align, Value &stop_idx, std::unique_ptr<InlineFunc> &&lambda)
+  Map(Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda)
     : MemInstr(Type::voidTy, "map"), ptr(&ptr), align(align), stop_idx(&stop_idx),
-      map_arr_elem(std::move(lambda)) {};
+      map_arr_elem(&lambda) {};
 
   auto& getPtr() const { return *ptr; }
   auto getAlign() const { return align; }
