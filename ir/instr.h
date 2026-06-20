@@ -1359,8 +1359,8 @@ public:
   void delParam(const InlineFuncParam *i);
 
   size_t numInstrs() const { return instrs.size(); }
-  Instr &instrAt(size_t idx, bool reversed = false) const { return *instrs.at(reversed ? (instrs.size() - idx - 1) : idx); }
-  Instr &instrBack() const { return *instrs.back(); }
+  Instr& instrAt(size_t idx, bool reversed = false) const { return *instrs.at(reversed ? (instrs.size() - idx - 1) : idx); }
+  Instr& instrBack() const { return *instrs.back(); }
   util::const_strip_unique_ptr<decltype(instrs)> getInstrs() const { return instrs; }
   void addInstr(std::unique_ptr<Instr> &&i, bool push_front = false);
   void addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before = true);
@@ -1379,24 +1379,24 @@ public:
 
   StateValue toSMT(State &s) const override { UNREACHABLE(); }
   smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
-  std::vector<std::unique_ptr<Instr>> cloneInstrs(Function &f, const std::string &suffix) const;
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+  std::vector<std::unique_ptr<Instr>> bodyInstrs(Function &f, const std::string &suffix) const;
 };
 
 
 
 class InlineFuncCall final : public Instr {
   std::vector<Value*> args;
-  InlineFunc* func;
+  InlineFunc *func;
 
 public:
-  InlineFuncCall(std::string &&name, std::vector<Value*>&& args, InlineFunc& func)
+  InlineFuncCall(std::string &&name, std::vector<Value*> &&args, InlineFunc &func)
     : Instr(func.getType(), std::move(name)), args(std::move(args)), func(&func) {}
 
   const auto& getFunc() const { return *func; };
   size_t numArgs() const { return args.size(); };
   auto getArgs() const { return args; };
-  Value &argAt(size_t idx, bool reversed = false) const { return *args.at(reversed ? (args.size() - idx - 1) : idx); }
+  Value& argAt(size_t idx, bool reversed = false) const { return *args.at(reversed ? (args.size() - idx - 1) : idx); }
 
   std::vector<Value*> operands() const override;
   bool propagatesPoison() const override { return func->propagatesPoison(); };
@@ -1407,6 +1407,7 @@ public:
   StateValue toSMT(State &s) const override { UNREACHABLE(); }
   smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+  std::pair<std::vector<std::unique_ptr<Instr>>, Value&> replacementInstrs(Function &f) const;
 };
 
 
@@ -1415,9 +1416,9 @@ class Map final : public MemInstr {
   Value *ptr;
   uint64_t align;
   Value *stop_idx;    // start_idx = 0, idx_step = 1
-  InlineFunc* map_arr_elem;
+  InlineFunc *map_arr_elem;
 
-  std::unique_ptr<InlineFunc> make_func_load_arr_idx(InlineFunc& map_arr_elem);
+  std::unique_ptr<InlineFunc> make_func_load_arr_idx(InlineFunc &map_arr_elem);
 
   public:
   static IntType arr_idx_type;

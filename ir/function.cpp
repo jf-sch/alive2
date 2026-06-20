@@ -116,7 +116,7 @@ void BasicBlock::rauw(const Value &what, Value &with) {
   }
 }
 
-void BasicBlock::expandInlineFunc(Function &f, InlineFuncCall& call) {
+void BasicBlock::expandInlineFunc(Function &f, InlineFuncCall &call) {
   auto call_pos = m_instrs.begin();
   for (;; ++call_pos) {
     assert(call_pos != m_instrs.end());
@@ -124,25 +124,13 @@ void BasicBlock::expandInlineFunc(Function &f, InlineFuncCall& call) {
       break;
     }
   }
-  const std::string suffix = call.getName();
-  auto& func = call.getFunc();
-  assert(call.numArgs() == func.numParams());
-  auto func_instrs = func.cloneInstrs(f, suffix);
-
-  for (auto &I: func_instrs) {
-    for (size_t i = 0; i < call.numArgs(); i++) {
-      I->rauw(func.paramAt(i), call.argAt(i));
-    }
+  auto instrs_and_ret = call.replacementInstrs(f);
+  auto &replace_instrs = instrs_and_ret.first;
+  auto &replace_val = instrs_and_ret.second;
+  for (auto &i: replace_instrs) {
+    call_pos = ++m_instrs.emplace(call_pos, std::move(i));
   }
-  auto I = func_instrs.begin(), E = func_instrs.end();
-  for (; I != E && dynamic_cast<const Return*>((*I).get()) == nullptr; ++I) {
-    assert(dynamic_cast<const JumpInstr*>((*I).get()) == nullptr);
-    call_pos = ++m_instrs.emplace(call_pos, std::move(*I));
-  }
-  auto ret = dynamic_cast<const Return*>((*I).get());
-  if (I != E && ret != nullptr) {
-    rauw(call, ret->getVal());
-  }
+  f.rauw(call, replace_val);
   m_instrs.erase(call_pos);
 }
 

@@ -5276,7 +5276,23 @@ void InlineFunc::print(std::ostream &os) const {
   os << "}";
 }
 
-std::vector<std::unique_ptr<Instr>> InlineFunc::cloneInstrs(Function &f, const std::string &suffix) const {
+std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
+  auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
+  for (auto &i : params) {
+    new_func->addParam(i->dup(suffix));
+  }
+  for (auto &i : instrs) {
+    new_func->addInstr(i->dup(f, suffix));
+  }
+  for (size_t i = 0; i < numParams(); i++) {
+    new_func->rauw(paramAt(i), new_func->paramAt(i));
+  }
+  for (size_t i = 0; i < numInstrs(); i++) {
+    new_func->rauw(instrAt(i), new_func->instrAt(i));
+  }
+  return new_func;
+}
+std::vector<std::unique_ptr<Instr>> InlineFunc::bodyInstrs(Function &f, const std::string &suffix) const {
   std::vector<std::unique_ptr<Instr>> instrs_cpy;
   for (auto &i : instrs) {
     instrs_cpy.emplace_back(i->dup(f, suffix));
@@ -5287,20 +5303,6 @@ std::vector<std::unique_ptr<Instr>> InlineFunc::cloneInstrs(Function &f, const s
     }
   }
   return instrs_cpy;
-}
-std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
-  auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
-  for (auto &i : params) {
-    new_func->addParam(i->dup(suffix));
-  }
-  auto new_instrs = cloneInstrs(f, suffix);
-  for (auto &i : new_instrs) {
-    new_func->addInstr(std::move(i));
-  }
-  for (size_t i = 0; i < numParams(); i++) {
-    new_func->rauw(paramAt(i), new_func->paramAt(i));
-  }
-  return new_func;
 }
 
 
@@ -5334,8 +5336,28 @@ void InlineFuncCall::print(std::ostream &os) const {
   }
   os << ")";
 }
+
 std::unique_ptr<Instr> InlineFuncCall::dup(Function &f, const std::string &suffix) const {
   return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), *func);
+}
+std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replacementInstrs(Function &f) const {
+  auto &suffix = getName();
+  assert(numArgs() == func->numParams());
+  auto replace_instrs = func->bodyInstrs(f, suffix);
+  Value *ret_val = nullptr;
+
+  for (auto &I: replace_instrs) {
+    assert(dynamic_cast<const JumpInstr*>(I.get()) == nullptr);
+    for (size_t i = 0; i < args.size(); i++) {
+      I->rauw(func->paramAt(i), *args[i]);
+    }
+    if (auto ret = dynamic_cast<const Return*>(I.get())) {
+      ret_val = &ret->getVal();
+      break;
+    }
+  }
+  auto &ret_val_ref = (ret_val != nullptr) ? *ret_val : voidVal;
+  return {std::move(replace_instrs), ret_val_ref};
 }
 
 
