@@ -4,7 +4,6 @@
 #include "ir/instr.h"
 #include "ir/function.h"
 #include "ir/globals.h"
-#include "ir/constant.h"
 #include "ir/type.h"
 #include "smt/expr.h"
 #include "smt/exprs.h"
@@ -5358,68 +5357,6 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
   }
   auto &ret_val_ref = (ret_val != nullptr) ? *ret_val : voidVal;
   return {std::move(replace_instrs), ret_val_ref};
-}
-
-
-
-DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
-DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
-
-IntType Map::arr_idx_type("arr_idx_type");
-
-std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &type) {
-  auto lambda = make_unique<InlineFunc>(type, "map_arr_elem");
-  lambda->addParam(make_unique<InlineFuncParam>(type, "elem"));
-  lambda->addParam(make_unique<InlineFuncParam>(arr_idx_type, "idx"));
-  return lambda;
-}
-
-uint64_t Map::getMaxAccessSize() const {
-  return round_up(Memory::getStoreByteSize(map_arr_elem->getType()), align);
-}
-
-MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
-  return ByteAccessInfo::get(map_arr_elem->getType(), true, align);
-}
-
-std::vector<Value*> Map::operands() const {
-  std::vector<Value*> ops = {map_arr_elem};
-  for (auto op : {ptr, stop_idx}) {
-    ops.emplace_back(op);
-  }
-  return ops;
-}
-
-void Map::rauw(const Value &what, Value &with) {
-  if (map_arr_elem == &what) {
-    auto new_lambda = dynamic_cast<InlineFunc*>(&with);
-    assert(new_lambda != nullptr);
-    map_arr_elem = new_lambda;
-  }
-  for (auto op : {ptr, stop_idx}) {
-    RAUW(op);
-  }
-}
-
-void Map::print(ostream &os) const {
-  os << "map " << *ptr << " align " << align << " [" << '0' << ':' << *stop_idx << ':' << '1' << "]\n " << map_arr_elem->getName();
-}
-
-StateValue Map::toSMT(State &s) const {
-  // TODO
-  return {};
-}
-
-expr Map::getTypeConstraints(const Function &f) const {
-  expr t = ptr->getType().enforcePtrType();
-  for (auto op : {stop_idx}) {
-    t &= op->getType().enforceIntType();
-  }
-  return t;
-}
-
-unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
-  return make_unique<Map>(*ptr, align, *stop_idx, *map_arr_elem);
 }
 
 }

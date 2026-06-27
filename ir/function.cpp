@@ -1238,5 +1238,46 @@ void LoopAnalysis::printDot(ostream &os) const {
   os << "}\n";
 }
 
-} 
+
+
+
+
+IntType Map::arr_idx_type("arr_idx_type");
+
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &type) {
+  auto lambda = make_unique<InlineFunc>(type, "lambda");
+  lambda->addParam(make_unique<InlineFuncParam>(type, "elem"));
+  lambda->addParam(make_unique<InlineFuncParam>(arr_idx_type, "idx"));
+  return lambda;
+}
+
+std::vector<Value*> Map::operands() const {
+  std::vector<Value*> ops = {lambda};
+  for (auto op : {ptr, stop_idx}) {
+    ops.emplace_back(op);
+  }
+  return ops;
+}
+
+unique_ptr<Map> Map::dup(Function &f, const std::string &suffix) const {
+  return make_unique<Map>(name + suffix, *ptr, align, *stop_idx, *lambda);
+}
+
+void Map::rauw(const Value &what, Value &with) {
+  if (lambda == &what) {
+    auto new_lambda = dynamic_cast<InlineFunc*>(&with);
+    assert(new_lambda != nullptr);
+    lambda = new_lambda;
+  }
+  for (auto op : {ptr, stop_idx}) {
+    RAUW(op);
+  }
+}
+
+std::ostream& operator<<(std::ostream &os, const Map &m) {
+  os << "map " << m.getPtr() << " align " << m.getAlign() << " [" << '0' << ':' << m.getStopIdx() << ':' << '1' << "]\n " << m.getLambda().getName();
+  return os;
+}
+
+}
 

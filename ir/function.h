@@ -314,4 +314,36 @@ public:
   void printDot(std::ostream &os) const;
 };
 
+
+
+
+
+class Map final {
+  std::string name;
+  Value *ptr;
+  uint64_t align;
+  Value *stop_idx;    // start_idx = 0, idx_step = 1
+  InlineFunc *lambda;
+
+  public:
+  static IntType arr_idx_type;
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
+
+  Map(std::string &&name, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda)
+    : name(std::move(name)), ptr(&ptr), align(align), stop_idx(&stop_idx),
+      lambda(&lambda) {};
+
+  const std::string& getName() const { return name; }
+  auto& getPtr() const { return *ptr; }
+  auto& getStopIdx() const { return *stop_idx; }
+  auto& getLambda() const { return *lambda; }
+  auto getAlign() const { return align; }
+
+  std::vector<Value*> operands() const;
+  std::unique_ptr<Map> dup(Function &f, const std::string &suffix) const;
+  void rauw(const Value &what, Value &with);
+
+  friend std::ostream& operator<<(std::ostream &os, const Map &m);
+};
+
 }

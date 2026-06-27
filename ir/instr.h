@@ -5,7 +5,6 @@
 
 #include "ir/attrs.h"
 #include "ir/value.h"
-#include "ir/constant.h"
 #include <string>
 #include <utility>
 #include <vector>
@@ -1408,41 +1407,6 @@ public:
   smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
   std::pair<std::vector<std::unique_ptr<Instr>>, Value&> replacementInstrs(Function &f) const;
-};
-
-
-
-class Map final : public MemInstr {
-  Value *ptr;
-  uint64_t align;
-  Value *stop_idx;    // start_idx = 0, idx_step = 1
-  InlineFunc *map_arr_elem;
-
-  std::unique_ptr<InlineFunc> make_func_load_arr_idx(InlineFunc &map_arr_elem);
-
-  public:
-  static IntType arr_idx_type;
-  static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
-
-  Map(Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda)
-    : MemInstr(Type::voidTy, "map"), ptr(&ptr), align(align), stop_idx(&stop_idx),
-      map_arr_elem(&lambda) {};
-
-  auto& getPtr() const { return *ptr; }
-  auto getAlign() const { return align; }
-
-  std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
-  uint64_t getMaxAccessSize() const override;
-  uint64_t getMaxGEPOffset() const override;
-  ByteAccessInfo getByteAccessInfo() const override;
-
-  std::vector<Value*> operands() const override;
-  bool propagatesPoison() const override { return true; }
-  void rauw(const Value &what, Value &with) override;
-  void print(std::ostream &os) const override;
-  StateValue toSMT(State &s) const override;
-  smt::expr getTypeConstraints(const Function &f) const override;
-  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
 };
 
 }
