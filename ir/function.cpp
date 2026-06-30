@@ -3,6 +3,7 @@
 
 #include "ir/function.h"
 #include "ir/instr.h"
+#include "ir/constant.h"
 #include "util/errors.h"
 #include "util/hash.h"
 #include "util/sort.h"
@@ -17,6 +18,29 @@ using namespace util;
 using namespace std;
 
 namespace IR {
+
+
+
+static IntType& get_int_type(uint64_t bits) {
+  static std::unordered_map<uint64_t, std::unique_ptr<IntType>> type_map;
+  if (!type_map.contains(bits)) {
+    type_map.emplace(bits, make_unique<IntType>("i" + to_string(bits), bits));
+  }
+  return *type_map.at(bits);
+}
+static VectorType& get_vec_type(uint64_t elems, Type &ty) {
+  static std::unordered_map<Type*, std::unordered_map<uint64_t, std::unique_ptr<VectorType>>> type_map;
+  if (!type_map.contains(&ty)) {
+    type_map.try_emplace(&ty);
+  }
+  auto& len_map = type_map.at(&ty);
+  if (!len_map.contains(elems)) {
+    len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
+  }
+  return *len_map.at(elems);
+}
+
+
 
 void BasicBlock::setInstrs(std::vector<std::unique_ptr<Instr>> &&instrs) {
   m_instrs = std::move(instrs);
@@ -263,6 +287,15 @@ void Function::removeBB(BasicBlock &BB) {
 
 void Function::addConstant(unique_ptr<Value> &&c) {
   constants.emplace_back(std::move(c));
+}
+IntConst& Function::getIntConst(int64_t val, Type &ty) {
+  auto c = make_unique<IntConst>(ty, val);
+  auto& ret = *c;
+  addConstant(std::move(c));
+  return ret;
+}
+IntConst& Function::getIntConst(int64_t val, uint64_t bits) {
+  return getIntConst(val, get_int_type(bits));
 }
 
 Value* Function::getGlobalVar(string_view name) const {
