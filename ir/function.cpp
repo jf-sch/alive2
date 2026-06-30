@@ -4,6 +4,7 @@
 #include "ir/function.h"
 #include "ir/instr.h"
 #include "ir/constant.h"
+#include "ir/globals.h"
 #include "util/errors.h"
 #include "util/hash.h"
 #include "util/sort.h"
@@ -34,7 +35,7 @@ static VectorType& get_vec_type(uint64_t elems, Type &ty) {
   if (!type_map.contains(&ty)) {
     type_map.try_emplace(&ty);
   }
-  auto& len_map = type_map.at(&ty);
+  auto &len_map = type_map.at(&ty);
   if (!len_map.contains(elems)) {
     len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
   }
@@ -290,10 +291,18 @@ void Function::addConstant(unique_ptr<Value> &&c) {
   constants.emplace_back(std::move(c));
 }
 IntConst& Function::getIntConst(int64_t val, Type &ty) {
-  auto c = make_unique<IntConst>(ty, val);
-  auto& ret = *c;
-  addConstant(std::move(c));
-  return ret;
+  static std::unordered_map<Type*, std::unordered_map<uint64_t, IntConst*>> const_map;
+  if (!const_map.contains(&ty)) {
+    const_map.try_emplace(&ty);
+  }
+  auto &val_map = const_map.at(&ty);
+  if (!val_map.contains(val)) {
+    auto c = make_unique<IntConst>(ty, val);
+    auto &c_ptr = *c;
+    addConstant(std::move(c));
+    val_map.emplace(val, &c_ptr);
+  }
+  return *val_map.at(val);
 }
 IntConst& Function::getIntConst(int64_t val, uint64_t bits) {
   return getIntConst(val, get_int_type(bits));
@@ -1276,12 +1285,14 @@ void LoopAnalysis::printDot(ostream &os) const {
 
 
 
-IntType Map::arr_idx_type("arr_idx_type");
-
-std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &type) {
-  auto lambda = make_unique<InlineFunc>(type, "lambda");
-  lambda->addParam(make_unique<InlineFuncParam>(type, "elem"));
-  lambda->addParam(make_unique<InlineFuncParam>(arr_idx_type, "idx"));
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, Type &idx_type, LambdaArgs lambda_args) {
+  auto lambda = make_unique<InlineFunc>(ret_type, "lambda");
+  if (lambda_args & Idx) {
+    lambda->addParam(make_unique<InlineFuncParam>(idx_type, "idx"));
+  }
+  if (lambda_args & Elem) {
+    lambda->addParam(make_unique<InlineFuncParam>(ret_type, "elem"));
+  }
   return lambda;
 }
 
@@ -1294,7 +1305,7 @@ std::vector<Value*> Map::operands() const {
 }
 
 unique_ptr<Map> Map::dup(Function &f, const std::string &suffix) const {
-  return make_unique<Map>(name + suffix, unroll_cnt, *ptr, align, *idx_type, *stop_idx, *lambda, gep_inbounds, gep_nusw, gep_nuw);
+  return make_unique<Map>(name + suffix, unroll_cnt, *ptr, align, *stop_idx, *lambda, lambda_args, gep_inbounds, gep_nusw, gep_nuw);
 }
 
 void Map::rauw(const Value &what, Value &with) {
@@ -1310,13 +1321,26 @@ void Map::rauw(const Value &what, Value &with) {
 
 std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, const BasicBlock &next_bb) const {
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
-  auto &i64 = get_int_type(64);
-  auto &i1 = get_int_type(1);
-  const auto unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
   const auto prefix = name + '_';
+  auto &lambda_ty = lambda->getType();
+
+  if (lambda_args == None && lambda_ty.isIntType() && lambda_ty.bits() == bits_byte) {
+    auto bb = make_unique<BasicBlock>(prefix + "bb");
+    auto val = make_unique<InlineFuncCall>(prefix + "get_val", std::vector<Value*>{}, *lambda);
+    auto memset = make_unique<Memset>(*ptr, *val, *stop_idx, align, TailCallInfo{.type = TailCallInfo::Tail});
+    bb->addInstr(std::move(val));
+    bb->addInstr(std::move(memset));
+    bb->addInstr(make_unique<Branch>(next_bb));
+    return replace_bbs;
+  }
+
+  auto &bool_ty = get_int_type(1);
+  auto &idx_ty = getIdxType();
+  auto &zero_idx = f.getIntConst(0, idx_ty);
+  const auto unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
 
   BasicBlock* prev_bb = nullptr;
-  Value* base_idx = &f.getIntConst(0, *idx_type);
+  Value* base_idx = &zero_idx;
   for (uint64_t curr_pow2 = unroll_cnt_bit_floor; curr_pow2 > 0; curr_pow2 >>= 1u) {
     const auto suffix = '#' + to_string(curr_pow2);
 
@@ -1326,43 +1350,44 @@ std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, const 
     if (prev_bb != nullptr) {
       prev_bb->addInstr(make_unique<Branch>(*cond));
     }
-    auto &curr_pow2_const = f.getIntConst(curr_pow2, base_idx->getType());
-    auto and_pow2 = make_unique<BinOp>(i64, prefix + "and" + suffix, *stop_idx, curr_pow2_const, BinOp::Op::And);
-    auto cmp = make_unique<ICmp>(i1, prefix + "nez" + suffix, ICmp::Cond::NE, *and_pow2, f.getIntConst(0, and_pow2->getType()));
+    auto &curr_pow2_const = f.getIntConst(curr_pow2, idx_ty);
+    auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix, *stop_idx, curr_pow2_const, BinOp::Op::And);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "nez" + suffix, ICmp::Cond::NE, *and_pow2, zero_idx);
     auto br_cond = make_unique<Branch>(*cmp, *cond_true, *cond_finaly);
     cond->addInstr(std::move(and_pow2));
     cond->addInstr(std::move(cmp));
     cond->addInstr(std::move(br_cond));
 
-    auto &vec_type = get_vec_type(curr_pow2, lambda->getType());
-    auto ptr_gep = make_unique<GEP>(lambda->getType(), prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    auto &vec_type = get_vec_type(curr_pow2, lambda_ty);
+    auto ptr_gep = make_unique<GEP>(lambda_ty, prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
     ptr_gep->addIdx(1, *base_idx);
-    auto vec_gep = make_unique<GEP>(vec_type, prefix + "vect_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(1, f.getIntConst(0, i1));
+    auto vec_gep = make_unique<GEP>(vec_type, prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(1, f.getIntConst(0, bool_ty));
     auto load_vec = make_unique<Load>(vec_type, prefix + "load_vec" + suffix, *vec_gep, align);
     Value* vec = load_vec.get();
 
     for (uint64_t curr_idx = 0; curr_idx < curr_pow2; curr_idx++) {
-      auto &curr_idx_const = f.getIntConst(curr_idx, base_idx->getType());
-      auto vec_extract = make_unique<ExtractElement>(lambda->getType(), prefix + "vec_extract" + suffix, *vec, curr_idx_const);
+      auto &curr_idx_const = f.getIntConst(curr_idx, idx_ty);
+      auto vec_extract = make_unique<ExtractElement>(lambda_ty, prefix + "vec_extract" + suffix, *vec, curr_idx_const);
       auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::vector<Value*>{vec_extract.get()}, *lambda);
-      auto vec_insert = make_unique<InsertElement>(lambda->getType(), prefix + "vec_insert" + suffix, *vec, *map_elem, curr_idx_const);
+      auto vec_insert = make_unique<InsertElement>(lambda_ty, prefix + "vec_insert" + suffix, *vec, *map_elem, curr_idx_const);
       vec = vec_insert.get();
       cond_true->addInstr(std::move(vec_extract));
       cond_true->addInstr(std::move(map_elem));
       cond_true->addInstr(std::move(vec_insert));
     }
     auto store_vec = make_unique<Store>(*vec_gep, *vec, align);
-    auto base_idx_updated = make_unique<BinOp>(base_idx->getType(), prefix + "base_idx_updated" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Add);
+    // auto base_idx_update = make_unique<BinOp>(idx_ty, prefix + "base_idx_update" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Add);
+    auto base_idx_update = make_unique<BinOp>(idx_ty, prefix + "base_idx_update" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Or);
     cond_true->addInstr(std::move(ptr_gep));
     cond_true->addInstr(std::move(vec_gep));
     cond_true->addInstr(std::move(load_vec));
     cond_true->addInstr(std::move(store_vec));
     cond_true->addInstr(make_unique<Branch>(*cond_finaly));
 
-    auto phi_base_idx = make_unique<Phi>(base_idx->getType(), prefix + "phi_base_idx" + suffix);
+    auto phi_base_idx = make_unique<Phi>(idx_ty, prefix + "phi_base_idx" + suffix);
     phi_base_idx->addValue(*base_idx, std::string(cond->getName()));
-    phi_base_idx->addValue(*base_idx_updated, std::string(cond_true->getName()));
+    phi_base_idx->addValue(*base_idx_update, std::string(cond_true->getName()));
     base_idx = phi_base_idx.get();
     cond_finaly->addInstr(std::move(phi_base_idx));
 

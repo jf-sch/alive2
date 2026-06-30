@@ -321,29 +321,33 @@ public:
 
 
 class Map final {
+public:
+  enum LambdaArgs { None = 0, Idx = 1u << 0u, Elem = 1u << 1u, IdxElem = Idx | Elem };
+
+private:
   std::string name;
   uint64_t unroll_cnt;
   Value *ptr;
   uint64_t align;
-  Type *idx_type;
   Value *stop_idx;    // start_idx = 0, idx_step = 1
   InlineFunc *lambda;
+  LambdaArgs lambda_args;
   bool gep_inbounds, gep_nusw, gep_nuw;
 
-  public:
-  static IntType arr_idx_type;
-  static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
+public:
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, Type &idx_type, LambdaArgs lambda_args);
 
-  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Type &idx_type, Value &stop_idx, InlineFunc &lambda, 
+  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, LambdaArgs lambda_args,
       bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
-    : name(std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), idx_type(&idx_type), stop_idx(&stop_idx), lambda(&lambda), 
+    : name(std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), stop_idx(&stop_idx), lambda(&lambda), lambda_args(lambda_args),
       gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw) {};
 
   const std::string& getName() const { return name; }
   auto& getPtr() const { return *ptr; }
   auto& getStopIdx() const { return *stop_idx; }
-  auto& getIdxType() const { return *idx_type; }
+  auto& getIdxType() const { return stop_idx->getType(); }
   auto& getLambda() const { return *lambda; }
+  auto getLambdaArgs() const { return lambda_args; }
   auto getAlign() const { return align; }
   auto getUnrollCnt() const { return unroll_cnt; }
 
