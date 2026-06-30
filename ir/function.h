@@ -322,28 +322,35 @@ public:
 
 class Map final {
   std::string name;
+  uint64_t unroll_cnt;
   Value *ptr;
   uint64_t align;
+  Type *idx_type;
   Value *stop_idx;    // start_idx = 0, idx_step = 1
   InlineFunc *lambda;
+  bool gep_inbounds, gep_nusw, gep_nuw;
 
   public:
   static IntType arr_idx_type;
   static std::unique_ptr<InlineFunc> get_lambda_template(Type &type);
 
-  Map(std::string &&name, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda)
-    : name(std::move(name)), ptr(&ptr), align(align), stop_idx(&stop_idx),
-      lambda(&lambda) {};
+  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Type &idx_type, Value &stop_idx, InlineFunc &lambda, 
+      bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
+    : name(std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), idx_type(&idx_type), stop_idx(&stop_idx), lambda(&lambda), 
+      gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw) {};
 
   const std::string& getName() const { return name; }
   auto& getPtr() const { return *ptr; }
   auto& getStopIdx() const { return *stop_idx; }
+  auto& getIdxType() const { return *idx_type; }
   auto& getLambda() const { return *lambda; }
   auto getAlign() const { return align; }
+  auto getUnrollCnt() const { return unroll_cnt; }
 
   std::vector<Value*> operands() const;
   std::unique_ptr<Map> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBs(Function &f, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };
