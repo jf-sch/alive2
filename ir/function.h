@@ -155,6 +155,7 @@ public:
   void addConstant(std::unique_ptr<Value> &&c);
   IntConst& getIntConst(int64_t val, Type &ty);
   IntConst& getIntConst(int64_t val, uint64_t bits);
+  PoisonValue& getPoison(Type &ty);
   util::const_strip_unique_ptr<decltype(constants)> getConstants() const {
     return constants;
   }
