@@ -354,6 +354,10 @@ public:
   std::vector<Value*> operands() const;
   std::unique_ptr<Map> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
+
+private:
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBsMemset(Function &f, const BasicBlock &next_bb) const;
+public:
   std::vector<std::unique_ptr<BasicBlock>> replacementBBs(Function &f, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
