@@ -361,7 +361,8 @@ private:
   std::pair<std::vector<std::unique_ptr<BasicBlock>>, Value&> unrollIdx(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
   std::vector<std::unique_ptr<BasicBlock>> replacementBBsMemset(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
 public:
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBs(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBsSingleStore(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBsBinDecomposition(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };

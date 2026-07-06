@@ -1356,18 +1356,103 @@ std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBsMemset(Function &f, 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
   auto bb = make_unique<BasicBlock>(prefix + "memset");
+  prev_bb.replaceTargetWith(&next_bb, bb.get());
   auto val = make_unique<InlineFuncCall>(prefix + "get_val", std::vector<Value*>{}, *lambda);
   auto memset = make_unique<Memset>(*ptr, *val, *stop_idx, align, TailCallInfo{.type = TailCallInfo::Tail});
   
   bb->addInstr(std::move(val));
   bb->addInstr(std::move(memset));
   bb->addInstr(make_unique<Branch>(next_bb));
-  prev_bb.replaceTargetWith(&next_bb, bb.get());
   replace_bbs.emplace_back(std::move(bb));
   return replace_bbs;
 }
 
-std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const {
+
+
+std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBsSingleStore(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const {
+  auto &elem_ty = lambda->getType();
+  if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
+    return replacementBBsMemset(f, prev_bb, next_bb);
+  }
+
+  std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
+  const auto prefix = name + '_';
+  auto &bool_ty = get_int_type(1);
+  auto &idx_ty = getIdxType();
+  auto &zero_idx = f.getIntConst(0, idx_ty);
+  auto &sink = f.getSinkBB();
+  
+  BasicBlock *prev_cond;
+  {
+    const uint64_t len = 0;
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    prev_bb.replaceTargetWith(&next_bb, cond.get());
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, zero_idx);
+    auto br_cond = make_unique<Branch>(*cmp, next_bb, sink);
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+    prev_cond = cond.get();
+    replace_bbs.emplace_back(std::move(cond));
+  }
+  Value *vec = nullptr;
+  for (uint64_t len = 1; len < unroll_cnt; len++) {
+    const uint64_t idx = len - 1;
+    IntConst &idx_const = f.getIntConst(idx, idx_ty);
+    IntConst &len_const = f.getIntConst(len, idx_ty);
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    auto map_len = make_unique<BasicBlock>(prefix + "map_len" + suffix);
+    prev_cond->replaceTargetWith(&sink, cond.get());
+
+    std::vector<Value*> args;
+    if (lambda_args & Idx) {
+      args.emplace_back(&idx_const);
+    }
+    if (lambda_args & Elem) {
+      auto elem_gep = make_unique<GEP>(elem_ty, prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      elem_gep->addIdx(1, idx_const);
+      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *elem_gep, align);
+      args.emplace_back(load_elem.get());
+      cond->addInstr(std::move(elem_gep));
+      cond->addInstr(std::move(load_elem));
+    }
+    auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
+
+    auto &vec_type = get_vec_type(len, elem_ty);
+    std::unique_ptr<Instr> new_vec;
+    if (vec != nullptr) {
+      auto &prev_vec_type = vec->getType();
+      auto vec_new_elem = make_unique<InsertElement>(elem_ty, prefix + "vec_new_elem" + suffix, f.getPoison(prev_vec_type), *map_elem, zero_idx);
+      auto r = std::views::iota(0u, static_cast<unsigned>(len));
+      new_vec = make_unique<ShuffleVector>(vec_type, prefix + "vec" + suffix, *vec, *vec_new_elem, std::vector<unsigned>(r.begin(), r.end()));
+      cond->addInstr(std::move(vec_new_elem));
+    } else {
+      // new_vec = make_unique<InsertElement>(elem_ty, prefix + "vec" + suffix, f.getPoison(elem_ty), *map_elem, zero_idx);
+      new_vec = make_unique<ConversionOp>(vec_type, prefix + "vec" + suffix, *map_elem, ConversionOp::BitCast);
+    }
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, len_const);
+    auto br_cond = make_unique<Branch>(*cmp, *map_len, sink);
+    vec = new_vec.get();
+    cond->addInstr(std::move(new_vec));
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+
+    auto vec_gep = make_unique<GEP>(vec_type, prefix + "vec_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(1, zero_idx);
+    auto store_vec = make_unique<Store>(*vec_gep, *vec, align);
+    
+    map_len->addInstr(std::move(vec_gep));
+    map_len->addInstr(std::move(store_vec));
+    map_len->addInstr(make_unique<Branch>(next_bb));
+
+    replace_bbs.emplace_back(std::move(cond));
+    replace_bbs.emplace_back(std::move(map_len));
+  }
+  return replace_bbs;
+}
+
+std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBsBinDecomposition(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const {
   auto &elem_ty = lambda->getType();
   if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
     return replacementBBsMemset(f, prev_bb, next_bb);
@@ -1381,12 +1466,12 @@ std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, BasicB
   const auto prefix = name + '_';
   auto &bool_ty = get_int_type(1);
   auto &idx_ty = getIdxType();
-  auto &zero = f.getIntConst(0, idx_ty);
+  auto &zero_idx = f.getIntConst(0, idx_ty);
   const auto unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
 
   BasicBlock *prev_cond = nullptr;
   BasicBlock *prev_map_range = nullptr;
-  Value *base_idx = &zero;
+  Value *base_idx = &zero_idx;
   Value *base_idx_new = base_idx;
   for (uint64_t curr_pow2 = unroll_cnt_bit_floor; curr_pow2 > 0; curr_pow2 >>= 1u) {
     const auto suffix = '#' + to_string(curr_pow2);
@@ -1409,7 +1494,7 @@ std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, BasicB
     }
     auto &curr_pow2_const = f.getIntConst(curr_pow2, idx_ty);
     auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix, len, curr_pow2_const, BinOp::Op::And);
-    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix, ICmp::Cond::EQ, *and_pow2, zero);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix, ICmp::Cond::EQ, *and_pow2, zero_idx);
     auto br_cond = make_unique<Branch>(*cmp, next_bb, *map_range);
     cond->addInstr(std::move(and_pow2));
     cond->addInstr(std::move(cmp));
@@ -1419,7 +1504,7 @@ std::vector<std::unique_ptr<BasicBlock>> Map::replacementBBs(Function &f, BasicB
     auto ptr_gep = make_unique<GEP>(elem_ty, prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
     ptr_gep->addIdx(1, *base_idx);
     auto vec_gep = make_unique<GEP>(vec_type, prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(1, f.getIntConst(0, bool_ty));
+    vec_gep->addIdx(1, zero_idx);
     Value *const vec_ptr = vec_gep.get();
     map_range->addInstr(std::move(ptr_gep));
     map_range->addInstr(std::move(vec_gep));
