@@ -44,6 +44,7 @@ protected:
 public:
   Type(std::string &&name) : name(std::move(name)) {}
   virtual unsigned bits() const = 0;
+  virtual unsigned bytes() const;
   virtual unsigned np_bits(bool fromInt) const;
 
   // to use when one needs the corresponding SMT type

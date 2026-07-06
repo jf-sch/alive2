@@ -1416,8 +1416,8 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       args.emplace_back(&idx_const);
     }
     if (lambda_args & Elem) {
-      auto elem_gep = make_unique<GEP>(elem_ty, prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-      elem_gep->addIdx(1, idx_const);
+      auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      elem_gep->addIdx(elem_ty, idx_const);
       auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *elem_gep, align);
       args.emplace_back(load_elem.get());
       cond->addInstr(std::move(elem_gep));
@@ -1430,13 +1430,12 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     auto &vec_type = get_vec_type(len, elem_ty);
     std::unique_ptr<Instr> new_vec;
     if (vec != nullptr) {
-      auto &prev_vec_type = vec->getType();
-      auto vec_new_elem = make_unique<InsertElement>(elem_ty, prefix + "vec_new_elem" + suffix, f.getPoison(prev_vec_type), *elem, zero_idx);
+      auto vec_new_elem = make_unique<InsertElement>(vec->getType(), prefix + "vec_new_elem" + suffix, f.getPoison(vec->getType()), *elem, zero_idx);
       auto r = std::views::iota(0u, static_cast<unsigned>(len));
       new_vec = make_unique<ShuffleVector>(vec_type, prefix + "vec" + suffix, *vec, *vec_new_elem, std::vector<unsigned>(r.begin(), r.end()));
       cond->addInstr(std::move(vec_new_elem));
     } else {
-      // new_vec = make_unique<InsertElement>(elem_ty, prefix + "vec" + suffix, f.getPoison(elem_ty), *elem, zero_idx);
+      // new_vec = make_unique<InsertElement>(vec_type, prefix + "vec" + suffix, f.getPoison(vec_type), *elem, zero_idx);
       new_vec = make_unique<ConversionOp>(vec_type, prefix + "vec" + suffix, *elem, ConversionOp::BitCast);
     }
     auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, len_const);
@@ -1446,8 +1445,8 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     cond->addInstr(std::move(cmp));
     cond->addInstr(std::move(br_cond));
 
-    auto vec_gep = make_unique<GEP>(vec_type, prefix + "vec_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(1, zero_idx);
+    auto vec_gep = make_unique<GEP>(ptr->getType(), prefix + "vec_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(vec_type, zero_idx);
     auto store_vec = make_unique<Store>(*vec_gep, *vec, align);
 
     map_len->addInstr(std::move(vec_gep));
@@ -1511,10 +1510,10 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     cond->addInstr(std::move(br_cond));
 
     auto &vec_type = get_vec_type(curr_pow2, elem_ty);
-    auto ptr_gep = make_unique<GEP>(elem_ty, prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    ptr_gep->addIdx(1, *base_idx);
-    auto vec_gep = make_unique<GEP>(vec_type, prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(1, zero_idx);
+    auto ptr_gep = make_unique<GEP>(ptr->getType(), prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    ptr_gep->addIdx(elem_ty, *base_idx);
+    auto vec_gep = make_unique<GEP>(ptr_gep->getType(), prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(vec_type, zero_idx);
     Value *const vec_ptr = vec_gep.get();
     map_range->addInstr(std::move(ptr_gep));
     map_range->addInstr(std::move(vec_gep));
@@ -1525,7 +1524,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       vec = load_vec.get();
       map_range->addInstr(std::move(load_vec));
     } else {
-      vec = &f.getPoison(elem_ty);
+      vec = &f.getPoison(vec_type);
     }
 
     for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
@@ -1544,7 +1543,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
         map_range->addInstr(std::move(vec_extract));
       }
       auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + inner_suffix, std::move(args), *lambda);
-      auto vec_insert = make_unique<InsertElement>(elem_ty, prefix + "vec_insert" + inner_suffix, *vec, *map_elem, vec_idx_const);
+      auto vec_insert = make_unique<InsertElement>(vec_type, prefix + "vec_insert" + inner_suffix, *vec, *map_elem, vec_idx_const);
       vec = vec_insert.get();
       map_range->addInstr(std::move(map_elem));
       map_range->addInstr(std::move(vec_insert));
