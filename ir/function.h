@@ -334,6 +334,7 @@ private:
   InlineFunc *lambda;
   LambdaArgs lambda_args;
   bool gep_inbounds, gep_nusw, gep_nuw;
+  bool idx_nsw, idx_nuw;
 
 public:
   static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, Type &idx_type, LambdaArgs lambda_args);
@@ -341,7 +342,7 @@ public:
   Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, LambdaArgs lambda_args,
       bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
     : name(std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), stop_idx(&stop_idx), lambda(&lambda), lambda_args(lambda_args),
-      gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw) {};
+      gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw), idx_nsw(false), idx_nuw(false) {};
 
   const std::string& getName() const { return name; }
   auto& getPtr() const { return *ptr; }
@@ -357,9 +358,10 @@ public:
   void rauw(const Value &what, Value &with);
 
 private:
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBsMemset(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, Value&> unrollIdx(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBsMemset(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
 public:
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBs(Function &f, const BasicBlock &next_bb) const;
+  std::vector<std::unique_ptr<BasicBlock>> replacementBBs(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };
