@@ -358,11 +358,11 @@ public:
   void rauw(const Value &what, Value &with);
 
 private:
-  std::pair<std::vector<std::unique_ptr<BasicBlock>>, Value&> unrollIdx(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBsMemset(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
+  std::tuple<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&, Value&> unrollIdx(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsMemset(Function &f, const BasicBlock &next_bb) const;
 public:
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBsSingleStore(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
-  std::vector<std::unique_ptr<BasicBlock>> replacementBBsBinDecomposition(Function &f, BasicBlock &prev_bb, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsBinDecomposition(Function &f, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };
