@@ -143,7 +143,7 @@ void BasicBlock::rauw(const Value &what, Value &with) {
   }
 }
 
-void BasicBlock::expandInlineFunc(Function &f, InlineFuncCall &call) {
+void BasicBlock::expandInlineFunc(Function &f, const InlineFuncCall &call) {
   auto call_pos = m_instrs.begin();
   for (;; ++call_pos) {
     assert(call_pos != m_instrs.end());
@@ -1046,6 +1046,19 @@ void CFG::edge_iterator::operator++(void) {
 
 bool CFG::edge_iterator::operator!=(edge_iterator &rhs) const {
   return bbi != rhs.bbi && (bbi == bbe || rhs.bbi == rhs.bbe || ti != rhs.ti);
+}
+
+std::vector<BasicBlock*> CFG::predBBs(const BasicBlock &bb) {
+  std::vector<BasicBlock*> pred_bbs;
+  for (auto pred : f.getBBs()) {
+    for (auto &curr_tgt : pred->targets()) {
+      if (&curr_tgt == &bb) {
+        pred_bbs.emplace_back(pred);
+        break;
+      }
+    }
+  }
+  return pred_bbs;
 }
 
 static string_view bb_dot_name(const string &name) {

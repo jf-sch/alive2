@@ -5345,18 +5345,19 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
   auto replace_instrs = func->bodyInstrs(f, suffix);
   Value *ret_val = nullptr;
 
-  for (auto &I: replace_instrs) {
-    assert(dynamic_cast<const JumpInstr*>(I.get()) == nullptr);
+  for (auto I = replace_instrs.begin(); I != replace_instrs.end(); ++I) {
+    assert(dynamic_cast<const JumpInstr*>(I->get()) == nullptr);
     for (size_t i = 0; i < args.size(); i++) {
-      I->rauw(func->paramAt(i), *args[i]);
+      (*I)->rauw(func->paramAt(i), *args[i]);
     }
-    if (auto ret = dynamic_cast<const Return*>(I.get())) {
+    if (auto ret = dynamic_cast<const Return*>(I->get())) {
       ret_val = &ret->getVal();
+      replace_instrs.erase(I, replace_instrs.end());
       break;
     }
   }
-  auto &ret_val_ref = (ret_val != nullptr) ? *ret_val : voidVal;
-  return {std::move(replace_instrs), ret_val_ref};
+  auto &replace_val = (ret_val != nullptr) ? *ret_val : voidVal;
+  return {std::move(replace_instrs), replace_val};
 }
 
 }

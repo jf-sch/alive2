@@ -70,7 +70,7 @@ public:
 
   std::unique_ptr<BasicBlock> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
-  void expandInlineFunc(Function &f, InlineFuncCall& call);
+  void expandInlineFunc(Function &f, const InlineFuncCall& call);
 
   friend std::ostream& operator<<(std::ostream &os, const BasicBlock &bb);
 };
@@ -261,6 +261,7 @@ public:
   }
   edge_iterator end() const { return { f.getBBs().end(), f.getBBs().end() }; }
 
+  std::vector<BasicBlock*> predBBs(const BasicBlock &tgt_bb);
   void printDot(std::ostream &os) const;
 };
 
