@@ -1447,7 +1447,6 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   for (uint64_t len = 1; len < unroll_cnt; len++) {
     const uint64_t idx = len - 1;
     IntConst &idx_const = f.getIntConst(idx, idx_ty);
-    IntConst &len_const = f.getIntConst(len, idx_ty);
     const auto suffix = '#' + to_string(len);
     auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
     auto map_len = make_unique<BasicBlock>(prefix + "map_len" + suffix);
@@ -1480,7 +1479,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       // new_vec = make_unique<InsertElement>(vec_type, prefix + "vec" + suffix, f.getPoison(vec_type), *elem, zero_idx);
       new_vec = make_unique<ConversionOp>(vec_type, prefix + "vec" + suffix, *elem, ConversionOp::BitCast);
     }
-    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, len_const);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(len, idx_ty));
     auto br_cond = make_unique<Branch>(*cmp, *map_len, sink);
     vec = new_vec.get();
     cond->addInstr(std::move(new_vec));
@@ -1522,8 +1521,6 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
   BasicBlock *prev_cond = nullptr;
   BasicBlock *prev_map_range = nullptr;
-  Value *base_idx = &zero_idx;
-  Value *base_idx_new = base_idx;
   for (uint64_t curr_pow2 = unroll_cnt_bit_floor; curr_pow2 > 0; curr_pow2 >>= 1u) {
     const auto suffix = '#' + to_string(curr_pow2);
     auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
@@ -1532,31 +1529,28 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     if (prev_cond != nullptr && prev_map_range != nullptr) {
       prev_cond->replaceTargetWith(&next_bb, cond.get());
       prev_map_range->replaceTargetWith(&next_bb, cond.get());
-
-      auto phi_base_idx = make_unique<Phi>(idx_ty, prefix + "phi_base_idx" + suffix);
-      phi_base_idx->addValue(*base_idx, std::string(prev_cond->getName()));
-      phi_base_idx->addValue(*base_idx_new, std::string(prev_map_range->getName()));
-      base_idx = phi_base_idx.get();
-      cond->addInstr(std::move(phi_base_idx));
     } else {
       for (auto &bb : replace_bbs) {
         bb->replaceTargetWith(&next_bb, cond.get());
       }
     }
-    auto &curr_pow2_const = f.getIntConst(curr_pow2, idx_ty);
-    auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix, len, curr_pow2_const, BinOp::Op::And);
+    auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix, len, f.getIntConst(curr_pow2, idx_ty), BinOp::Op::And);
     auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix, ICmp::Cond::EQ, *and_pow2, zero_idx);
     auto br_cond = make_unique<Branch>(*cmp, next_bb, *map_range);
     cond->addInstr(std::move(and_pow2));
     cond->addInstr(std::move(cmp));
     cond->addInstr(std::move(br_cond));
 
+    const int64_t base_idx_mask = curr_pow2 - 1;
+    // const int64_t base_idx_mask = ~((curr_pow2 << 1u) - 1);
+    auto base_idx = make_unique<BinOp>(idx_ty, prefix + "base_idx" + suffix, len, f.getIntConst(base_idx_mask, idx_ty), BinOp::Op::And);
     auto &vec_type = get_vec_type(curr_pow2, elem_ty);
     auto ptr_gep = make_unique<GEP>(ptr->getType(), prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
     ptr_gep->addIdx(elem_ty, *base_idx);
     auto vec_gep = make_unique<GEP>(ptr_gep->getType(), prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
     vec_gep->addIdx(vec_type, zero_idx);
     Value *const vec_ptr = vec_gep.get();
+    map_range->addInstr(std::move(base_idx));
     map_range->addInstr(std::move(ptr_gep));
     map_range->addInstr(std::move(vec_gep));
 
@@ -1575,7 +1569,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       std::vector<Value*> args;
       if (lambda_args & Idx) {
         auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Add);
-        // auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Or, BinOp::Disjoint);
+        // auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Or, BinOp::Disjoint);  // only for base_idx_mask = ~((curr_pow2 << 1u) - 1);
         args.emplace_back(curr_idx.get());
         map_range->addInstr(std::move(curr_idx));
       }
@@ -1591,11 +1585,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       map_range->addInstr(std::move(vec_insert));
     }
     auto store_vec = make_unique<Store>(*vec_ptr, *vec, align);
-    auto base_idx_inc = make_unique<BinOp>(idx_ty, prefix + "base_idx_new" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Add);
-    // auto base_idx_inc = make_unique<BinOp>(idx_ty, prefix + "base_idx_inc" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Or, BinOp::Disjoint);
-    base_idx_new = base_idx_inc.get();
     map_range->addInstr(std::move(store_vec));
-    map_range->addInstr(std::move(base_idx_inc));
     map_range->addInstr(make_unique<Branch>(next_bb));
 
     prev_cond = cond.get();
