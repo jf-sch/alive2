@@ -5347,7 +5347,7 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
 
   for (auto I = replace_instrs.begin(); I != replace_instrs.end(); ++I) {
     assert(dynamic_cast<const JumpInstr*>(I->get()) == nullptr);
-    for (size_t i = 0; i < args.size(); i++) {
+    for (size_t i = 0; i < std::min(func->numParams(), numArgs()); i++) {
       (*I)->rauw(func->paramAt(i), *args[i]);
     }
     if (auto ret = dynamic_cast<const Return*>(I->get())) {

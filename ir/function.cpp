@@ -143,22 +143,21 @@ void BasicBlock::rauw(const Value &what, Value &with) {
   }
 }
 
-void BasicBlock::expandInlineFunc(Function &f, const InlineFuncCall &call) {
-  auto call_pos = m_instrs.begin();
-  for (;; ++call_pos) {
-    assert(call_pos != m_instrs.end());
-    if (call_pos->get() == &call) {
-      break;
+void BasicBlock::expandInlineFuncs(Function &f) {
+  for (auto call_pos = m_instrs.begin(); call_pos != m_instrs.end(); ) {
+    if (auto call = dynamic_cast<InlineFuncCall*>(call_pos->get())) {
+      auto instrs_and_ret = call->replacementInstrs(f);
+      auto &replace_instrs = instrs_and_ret.first;
+      auto &replace_val = instrs_and_ret.second;
+      for (auto &i: replace_instrs) {
+        call_pos = ++m_instrs.emplace(call_pos, std::move(i));
+      }
+      f.rauw(*call, replace_val);
+      call_pos = m_instrs.erase(call_pos);
+    } else {
+      ++call_pos;
     }
   }
-  auto instrs_and_ret = call.replacementInstrs(f);
-  auto &replace_instrs = instrs_and_ret.first;
-  auto &replace_val = instrs_and_ret.second;
-  for (auto &i: replace_instrs) {
-    call_pos = ++m_instrs.emplace(call_pos, std::move(i));
-  }
-  f.rauw(call, replace_val);
-  m_instrs.erase(call_pos);
 }
 
 ostream& operator<<(ostream &os, const BasicBlock &bb) {
@@ -292,11 +291,10 @@ void Function::addConstant(unique_ptr<Value> &&c) {
   constants.emplace_back(std::move(c));
 }
 IntConst& Function::getIntConst(int64_t val, Type &ty) {
-  static std::unordered_map<Type*, std::unordered_map<uint64_t, IntConst*>> const_map;
-  if (!const_map.contains(&ty)) {
-    const_map.try_emplace(&ty);
+  if (!int_const_map.contains(&ty)) {
+    int_const_map.try_emplace(&ty);
   }
-  auto &val_map = const_map.at(&ty);
+  auto &val_map = int_const_map.at(&ty);
   if (!val_map.contains(val)) {
     auto c = make_unique<IntConst>(ty, val);
     auto &c_ptr = *c;
@@ -1048,7 +1046,7 @@ bool CFG::edge_iterator::operator!=(edge_iterator &rhs) const {
   return bbi != rhs.bbi && (bbi == bbe || rhs.bbi == rhs.bbe || ti != rhs.ti);
 }
 
-std::vector<BasicBlock*> CFG::predBBs(const BasicBlock &bb) {
+std::vector<BasicBlock*> CFG::predBBs(Function &f, const BasicBlock &bb) {
   std::vector<BasicBlock*> pred_bbs;
   for (auto pred : f.getBBs()) {
     for (auto &curr_tgt : pred->targets()) {
@@ -1563,7 +1561,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     }
     auto store_vec = make_unique<Store>(*vec_ptr, *vec, align);
     auto base_idx_inc = make_unique<BinOp>(idx_ty, prefix + "base_idx_new" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Add);
-    // auto base_idx_inc = make_unique<BinOp>(idx_ty, prefix + "base_idx_inc" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Or);
+    // auto base_idx_inc = make_unique<BinOp>(idx_ty, prefix + "base_idx_inc" + suffix, *base_idx, curr_pow2_const, BinOp::Op::Or, BinOp::Disjoint);
     base_idx_new = base_idx_inc.get();
     map_range->addInstr(std::move(store_vec));
     map_range->addInstr(std::move(base_idx_inc));

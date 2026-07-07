@@ -70,7 +70,7 @@ public:
 
   std::unique_ptr<BasicBlock> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
-  void expandInlineFunc(Function &f, const InlineFuncCall& call);
+  void expandInlineFuncs(Function &f);
 
   friend std::ostream& operator<<(std::ostream &os, const BasicBlock &bb);
 };
@@ -91,6 +91,7 @@ class Function final {
 
   // constants used in this function
   std::vector<std::unique_ptr<Value>> constants;
+  std::unordered_map<Type*, std::unordered_map<uint64_t, IntConst*>> int_const_map;
   std::vector<std::unique_ptr<Predicate>> predicates;
   std::vector<std::unique_ptr<Value>> undefs;
   std::vector<std::unique_ptr<AggregateValue>> aggregates;
@@ -261,7 +262,7 @@ public:
   }
   edge_iterator end() const { return { f.getBBs().end(), f.getBBs().end() }; }
 
-  std::vector<BasicBlock*> predBBs(const BasicBlock &tgt_bb);
+  static std::vector<BasicBlock*> predBBs(Function &f, const BasicBlock &bb);
   void printDot(std::ostream &os) const;
 };
 
