@@ -143,6 +143,11 @@ void BasicBlock::rauw(const Value &what, Value &with) {
   }
 }
 
+void BasicBlock::transferInstrs(BasicBlock &tgt_bb) {
+  tgt_bb.setInstrs(std::move(m_instrs));
+  m_instrs.clear();
+}
+
 void BasicBlock::expandInlineFuncs(Function &f) {
   for (auto call_pos = m_instrs.begin(); call_pos != m_instrs.end(); ) {
     if (auto call = dynamic_cast<InlineFuncCall*>(call_pos->get())) {
@@ -284,6 +289,27 @@ void Function::removeBB(BasicBlock &BB) {
       BB_order.erase(I);
       break;
     }
+  }
+}
+
+void Function::addBBs(std::vector<std::unique_ptr<BasicBlock>> &&bbs) {
+  std::vector<BasicBlock*> new_bbs;
+  for (auto &src_bb : bbs) {
+    auto &tgt_bb = getBB(src_bb->getName(), false);
+    new_bbs.emplace_back(&tgt_bb);
+    src_bb->transferInstrs(tgt_bb);
+  }
+  for (auto bb : getBBs()) {
+    for (size_t i = 0; i < new_bbs.size(); i++) {
+      bb->replaceTargetWith(bbs[i].get(), new_bbs[i]);
+    }
+  }
+  topSort();
+}
+
+void Function::replaceTargetWith(const BasicBlock &from, const BasicBlock &to) {
+  for (auto &pred : CFG::predBBs(*this, from)) {
+    pred->replaceTargetWith(&from, &to);
   }
 }
 

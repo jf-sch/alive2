@@ -70,6 +70,8 @@ public:
 
   std::unique_ptr<BasicBlock> dup(Function &f, const std::string &suffix) const;
   void rauw(const Value &what, Value &with);
+
+  void transferInstrs(BasicBlock &tgt_bb);
   void expandInlineFuncs(Function &f);
 
   friend std::ostream& operator<<(std::ostream &os, const BasicBlock &bb);
@@ -152,6 +154,8 @@ public:
   BasicBlock& insertBBAfter(std::string_view name, const BasicBlock &bb);
 
   void removeBB(BasicBlock &BB);
+  void addBBs(std::vector<std::unique_ptr<BasicBlock>> &&bbs);
+  void replaceTargetWith(const BasicBlock &from, const BasicBlock &to);
 
   void addConstant(std::unique_ptr<Value> &&c);
   IntConst& getIntConst(int64_t val, Type &ty);
