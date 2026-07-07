@@ -5296,7 +5296,7 @@ std::vector<std::unique_ptr<Instr>> InlineFunc::bodyInstrs(Function &f, const st
   for (auto &i : instrs) {
     instrs_cpy.emplace_back(i->dup(f, suffix));
   }
-  for (auto &I : instrs) {
+  for (auto &I : instrs_cpy) {
     for (size_t i = 0; i < numInstrs(); i++) {
       I->rauw(instrAt(i), *instrs_cpy[i]);
     }
@@ -5340,9 +5340,8 @@ std::unique_ptr<Instr> InlineFuncCall::dup(Function &f, const std::string &suffi
   return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), *func);
 }
 std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replacementInstrs(Function &f) const {
-  auto &suffix = getName();
   assert(numArgs() == func->numParams());
-  auto replace_instrs = func->bodyInstrs(f, suffix);
+  auto replace_instrs = func->bodyInstrs(f, '_' + getName());
   Value *ret_val = nullptr;
 
   for (auto I = replace_instrs.begin(); I != replace_instrs.end(); ++I) {

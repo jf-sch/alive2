@@ -149,18 +149,17 @@ void BasicBlock::transferInstrs(BasicBlock &tgt_bb) {
 }
 
 void BasicBlock::expandInlineFuncs(Function &f) {
-  for (auto call_pos = m_instrs.begin(); call_pos != m_instrs.end(); ) {
-    if (auto call = dynamic_cast<InlineFuncCall*>(call_pos->get())) {
+  for (auto I = m_instrs.end(); I != m_instrs.begin();) {
+    --I;
+    if (auto call = dynamic_cast<InlineFuncCall*>(I->get())) {
       auto instrs_and_ret = call->replacementInstrs(f);
       auto &replace_instrs = instrs_and_ret.first;
       auto &replace_val = instrs_and_ret.second;
       for (auto &i: replace_instrs) {
-        call_pos = ++m_instrs.emplace(call_pos, std::move(i));
+        I = ++m_instrs.emplace(I, std::move(i));
       }
       f.rauw(*call, replace_val);
-      call_pos = m_instrs.erase(call_pos);
-    } else {
-      ++call_pos;
+      I = m_instrs.erase(I);
     }
   }
 }
@@ -310,6 +309,12 @@ void Function::addBBs(std::vector<std::unique_ptr<BasicBlock>> &&bbs) {
 void Function::replaceTargetWith(const BasicBlock &from, const BasicBlock &to) {
   for (auto &pred : CFG::predBBs(*this, from)) {
     pred->replaceTargetWith(&from, &to);
+  }
+}
+
+void Function::expandInlineFuncs() {
+  for (auto bb : getBBs()) {
+    bb->expandInlineFuncs(*this);
   }
 }
 

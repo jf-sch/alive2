@@ -156,6 +156,7 @@ public:
   void removeBB(BasicBlock &BB);
   void addBBs(std::vector<std::unique_ptr<BasicBlock>> &&bbs);
   void replaceTargetWith(const BasicBlock &from, const BasicBlock &to);
+  void expandInlineFuncs();
 
   void addConstant(std::unique_ptr<Value> &&c);
   IntConst& getIntConst(int64_t val, Type &ty);
