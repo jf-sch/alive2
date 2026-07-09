@@ -1442,9 +1442,9 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     prev_cond = cond.get();
     replace_bbs.emplace_back(std::move(cond));
   }
-  BasicBlock &entry = *prev_cond;
+  auto &entry = *prev_cond;
   Value *vec = nullptr;
-  for (uint64_t len = 1; len < unroll_cnt; len++) {
+  for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
     const uint64_t idx = len - 1;
     IntConst &idx_const = f.getIntConst(idx, idx_ty);
     const auto suffix = '#' + to_string(len);
@@ -1508,16 +1508,20 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   }
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
-  auto bbs_and_len = unrollIdx(f, next_bb);
-  replace_bbs = std::move(std::get<0>(bbs_and_len));
-  auto &entry = std::get<1>(bbs_and_len);
-  auto &len = std::get<2>(bbs_and_len);
-
   const auto prefix = name + '_';
   auto &bool_ty = get_int_type(1);
   auto &idx_ty = getIdxType();
   auto &zero_idx = f.getIntConst(0, idx_ty);
-  const auto unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
+  const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
+
+  auto &len = *stop_idx;
+  auto unroll_cond = make_unique<BasicBlock>(prefix + "unroll_cond");
+  auto leq_unroll_cnt = make_unique<ICmp>(bool_ty, prefix + "leq_unroll_cnt", ICmp::Cond::ULE, len, f.getIntConst(unroll_cnt, idx_ty));
+  auto br = make_unique<Branch>(*leq_unroll_cnt, next_bb, f.getSinkBB());
+  unroll_cond->addInstr(std::move(leq_unroll_cnt));
+  unroll_cond->addInstr(std::move(br));
+  auto &entry = *unroll_cond;
+  replace_bbs.emplace_back(std::move(unroll_cond));
 
   BasicBlock *prev_cond = nullptr;
   BasicBlock *prev_map_range = nullptr;
@@ -1565,7 +1569,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
     for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
       const auto inner_suffix = suffix + '#' + to_string(vec_idx);
-      auto &vec_idx_const = f.getIntConst(vec_idx, idx_ty);
+      IntConst &vec_idx_const = f.getIntConst(vec_idx, idx_ty);
       std::vector<Value*> args;
       if (lambda_args & Idx) {
         auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Add);
