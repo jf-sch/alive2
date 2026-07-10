@@ -369,7 +369,7 @@ private:
   std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsMemset(Function &f, const BasicBlock &next_bb) const;
 public:
   std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const;
-  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsBinDecomposition(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };

@@ -1501,7 +1501,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   return {std::move(replace_bbs), entry};
 }
 
-std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinDecomposition(Function &f, const BasicBlock &next_bb) const {
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
   auto &elem_ty = lambda->getType();
   if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
     return replacementBBsMemset(f, next_bb);
@@ -1513,90 +1513,94 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   auto &idx_ty = getIdxType();
   auto &zero_idx = f.getIntConst(0, idx_ty);
   const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
+  const uint64_t leaf_tree_nodes = unroll_cnt_bit_floor << 1u;
 
   auto &len = *stop_idx;
+  uint64_t curr_tree_nodes = leaf_tree_nodes;
+  curr_tree_nodes >>= 1u;
+  std::unordered_map<uint64_t, std::unordered_map<uint64_t, const BasicBlock*>> tree_nodes_len_idx;
+  tree_nodes_len_idx.try_emplace(0);
+  for (uint64_t idx = 0; idx < unroll_cnt + 1; idx++) {
+    tree_nodes_len_idx.at(0).emplace(idx, &next_bb);
+  }
+  for (uint64_t curr_pow2 = 1; curr_pow2 < unroll_cnt_bit_floor + 1; curr_pow2 <<= 1u) {
+    tree_nodes_len_idx.try_emplace(curr_pow2);
+    const auto suffix = '#' + to_string(curr_pow2);
+
+    for (uint64_t curr_node = 0; curr_node < curr_tree_nodes; curr_node++) {
+      const uint64_t base_idx = curr_node * (curr_pow2 << 1u);
+      if (base_idx + curr_pow2 > unroll_cnt) {
+        break;
+      }
+      IntConst &base_idx_const = f.getIntConst(base_idx, idx_ty);
+      const auto suffix2 = suffix + '#' + to_string(curr_node);
+      auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix2);
+      auto map_range = make_unique<BasicBlock>(prefix + "map_range" + suffix2);
+
+      auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix2, len, f.getIntConst(curr_pow2, idx_ty), BinOp::Op::And);
+      auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix2, ICmp::Cond::EQ, *and_pow2, zero_idx);
+      auto br_cond = make_unique<Branch>(*cmp, *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
+      cond->addInstr(std::move(and_pow2));
+      cond->addInstr(std::move(cmp));
+      cond->addInstr(std::move(br_cond));
+
+      auto &vec_type = get_vec_type(curr_pow2, elem_ty);
+      auto ptr_gep = make_unique<GEP>(ptr->getType(), prefix + "ptr_gep" + suffix2, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      ptr_gep->addIdx(elem_ty, base_idx_const);
+      auto vec_gep = make_unique<GEP>(ptr_gep->getType(), prefix + "vec_gep" + suffix2, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
+      vec_gep->addIdx(vec_type, zero_idx);
+      Value *const vec_ptr = vec_gep.get();
+      map_range->addInstr(std::move(ptr_gep));
+      map_range->addInstr(std::move(vec_gep));
+
+      Value *vec;
+      if (lambda_args & Elem) {
+        auto load_vec = make_unique<Load>(vec_type, prefix + "load_vec" + suffix2, *vec_ptr, align);
+        vec = load_vec.get();
+        map_range->addInstr(std::move(load_vec));
+      } else {
+        vec = &f.getPoison(vec_type);
+      }
+
+      for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
+        const auto suffix3 = suffix2 + '#' + to_string(vec_idx);
+        IntConst &vec_idx_const = f.getIntConst(vec_idx, idx_ty);
+        std::vector<Value*> args;
+        if (lambda_args & Idx) {
+          args.emplace_back(&f.getIntConst(base_idx + vec_idx, idx_ty));
+        }
+        if (lambda_args & Elem) {
+          auto vec_extract = make_unique<ExtractElement>(elem_ty, prefix + "vec_extract" + suffix3, *vec, vec_idx_const);
+          args.emplace_back(vec_extract.get());
+          map_range->addInstr(std::move(vec_extract));
+        }
+        auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix3, std::move(args), *lambda);
+        auto vec_insert = make_unique<InsertElement>(vec_type, prefix + "vec_insert" + suffix3, *vec, *map_elem, vec_idx_const);
+        vec = vec_insert.get();
+        map_range->addInstr(std::move(map_elem));
+        map_range->addInstr(std::move(vec_insert));
+      }
+      auto store_vec = make_unique<Store>(*vec_ptr, *vec, align);
+      map_range->addInstr(std::move(store_vec));
+
+      const uint64_t next_idx = base_idx + curr_pow2;
+      uint64_t next_len = std::min(curr_pow2 >> 1u, std::bit_floor(unroll_cnt - next_idx));
+      map_range->addInstr(make_unique<Branch>(*tree_nodes_len_idx.at(next_len).at(next_idx)));
+      tree_nodes_len_idx.at(curr_pow2).emplace(base_idx, cond.get());
+      replace_bbs.emplace(replace_bbs.begin(), std::move(map_range));
+      replace_bbs.emplace(replace_bbs.begin(), std::move(cond));
+    }
+    curr_tree_nodes >>= 1u;
+  }
+
   auto unroll_cond = make_unique<BasicBlock>(prefix + "unroll_cond");
   auto leq_unroll_cnt = make_unique<ICmp>(bool_ty, prefix + "leq_unroll_cnt", ICmp::Cond::ULE, len, f.getIntConst(unroll_cnt, idx_ty));
-  auto br = make_unique<Branch>(*leq_unroll_cnt, next_bb, f.getSinkBB());
+  auto br = make_unique<Branch>(*leq_unroll_cnt, *tree_nodes_len_idx.at(unroll_cnt_bit_floor).at(0), f.getSinkBB());
   unroll_cond->addInstr(std::move(leq_unroll_cnt));
   unroll_cond->addInstr(std::move(br));
   auto &entry = *unroll_cond;
-  replace_bbs.emplace_back(std::move(unroll_cond));
+  replace_bbs.emplace(replace_bbs.begin(), std::move(unroll_cond));
 
-  BasicBlock *prev_cond = nullptr;
-  BasicBlock *prev_map_range = nullptr;
-  for (uint64_t curr_pow2 = unroll_cnt_bit_floor; curr_pow2 > 0; curr_pow2 >>= 1u) {
-    const auto suffix = '#' + to_string(curr_pow2);
-    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
-    auto map_range = make_unique<BasicBlock>(prefix + "map_range" + suffix);
-
-    if (prev_cond != nullptr && prev_map_range != nullptr) {
-      prev_cond->replaceTargetWith(&next_bb, cond.get());
-      prev_map_range->replaceTargetWith(&next_bb, cond.get());
-    } else {
-      for (auto &bb : replace_bbs) {
-        bb->replaceTargetWith(&next_bb, cond.get());
-      }
-    }
-    auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix, len, f.getIntConst(curr_pow2, idx_ty), BinOp::Op::And);
-    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix, ICmp::Cond::EQ, *and_pow2, zero_idx);
-    auto br_cond = make_unique<Branch>(*cmp, next_bb, *map_range);
-    cond->addInstr(std::move(and_pow2));
-    cond->addInstr(std::move(cmp));
-    cond->addInstr(std::move(br_cond));
-
-    const int64_t base_idx_mask = curr_pow2 - 1;
-    // const int64_t base_idx_mask = ~((curr_pow2 << 1u) - 1);
-    auto base_idx = make_unique<BinOp>(idx_ty, prefix + "base_idx" + suffix, len, f.getIntConst(base_idx_mask, idx_ty), BinOp::Op::And);
-    auto &vec_type = get_vec_type(curr_pow2, elem_ty);
-    auto ptr_gep = make_unique<GEP>(ptr->getType(), prefix + "ptr_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    ptr_gep->addIdx(elem_ty, *base_idx);
-    auto vec_gep = make_unique<GEP>(ptr_gep->getType(), prefix + "vec_gep" + suffix, *ptr_gep, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(vec_type, zero_idx);
-    Value *const vec_ptr = vec_gep.get();
-    map_range->addInstr(std::move(base_idx));
-    map_range->addInstr(std::move(ptr_gep));
-    map_range->addInstr(std::move(vec_gep));
-
-    Value *vec;
-    if (lambda_args & Elem) {
-      auto load_vec = make_unique<Load>(vec_type, prefix + "load_vec" + suffix, *vec_ptr, align);
-      vec = load_vec.get();
-      map_range->addInstr(std::move(load_vec));
-    } else {
-      vec = &f.getPoison(vec_type);
-    }
-
-    for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
-      const auto inner_suffix = suffix + '#' + to_string(vec_idx);
-      IntConst &vec_idx_const = f.getIntConst(vec_idx, idx_ty);
-      std::vector<Value*> args;
-      if (lambda_args & Idx) {
-        auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Add);
-        // auto curr_idx = make_unique<BinOp>(idx_ty, prefix + "curr_idx" + inner_suffix, *base_idx, vec_idx_const, BinOp::Op::Or, BinOp::Disjoint);  // only for base_idx_mask = ~((curr_pow2 << 1u) - 1);
-        args.emplace_back(curr_idx.get());
-        map_range->addInstr(std::move(curr_idx));
-      }
-      if (lambda_args & Elem) {
-        auto vec_extract = make_unique<ExtractElement>(elem_ty, prefix + "vec_extract" + inner_suffix, *vec, vec_idx_const);
-        args.emplace_back(vec_extract.get());
-        map_range->addInstr(std::move(vec_extract));
-      }
-      auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + inner_suffix, std::move(args), *lambda);
-      auto vec_insert = make_unique<InsertElement>(vec_type, prefix + "vec_insert" + inner_suffix, *vec, *map_elem, vec_idx_const);
-      vec = vec_insert.get();
-      map_range->addInstr(std::move(map_elem));
-      map_range->addInstr(std::move(vec_insert));
-    }
-    auto store_vec = make_unique<Store>(*vec_ptr, *vec, align);
-    map_range->addInstr(std::move(store_vec));
-    map_range->addInstr(make_unique<Branch>(next_bb));
-
-    prev_cond = cond.get();
-    prev_map_range = map_range.get();
-    replace_bbs.emplace_back(std::move(cond));
-    replace_bbs.emplace_back(std::move(map_range));
-  }
   return {std::move(replace_bbs), entry};
 }
 
