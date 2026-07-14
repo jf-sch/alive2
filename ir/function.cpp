@@ -1514,10 +1514,18 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   auto &zero_idx = f.getIntConst(0, idx_ty);
   const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
   const uint64_t leaf_tree_nodes = unroll_cnt_bit_floor << 1u;
-
   auto &len = *stop_idx;
+
+  auto unroll_cond = make_unique<BasicBlock>(prefix + "unroll_cond");
+  auto bit_checks_bb = make_unique<BasicBlock>(prefix + "bit_checks");
+  auto leq_unroll_cnt = make_unique<ICmp>(bool_ty, prefix + "leq_unroll_cnt", ICmp::Cond::ULE, len, f.getIntConst(unroll_cnt, idx_ty));
+  auto br_unroll_cond = make_unique<Branch>(*leq_unroll_cnt, *bit_checks_bb, f.getSinkBB());
+  unroll_cond->addInstr(std::move(leq_unroll_cnt));
+  unroll_cond->addInstr(std::move(br_unroll_cond));
+
   uint64_t curr_tree_nodes = leaf_tree_nodes;
   curr_tree_nodes >>= 1u;
+  std::unordered_map<uint64_t, Value*> bit_checks;
   std::unordered_map<uint64_t, std::unordered_map<uint64_t, const BasicBlock*>> tree_nodes_len_idx;
   tree_nodes_len_idx.try_emplace(0);
   for (uint64_t idx = 0; idx < unroll_cnt + 1; idx++) {
@@ -1537,11 +1545,15 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix2);
       auto map_range = make_unique<BasicBlock>(prefix + "map_range" + suffix2);
 
-      auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix2, len, f.getIntConst(curr_pow2, idx_ty), BinOp::Op::And);
-      auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix2, ICmp::Cond::EQ, *and_pow2, zero_idx);
+      if (!bit_checks.contains(curr_pow2)) {
+        auto and_pow2 = make_unique<BinOp>(idx_ty, prefix + "and" + suffix2, len, f.getIntConst(curr_pow2, idx_ty), BinOp::Op::And);
+        auto bit_cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix2, ICmp::Cond::EQ, *and_pow2, zero_idx);
+        bit_checks.emplace(curr_pow2, bit_cmp.get());
+        bit_checks_bb->addInstr(std::move(and_pow2));
+        bit_checks_bb->addInstr(std::move(bit_cmp));
+      }
+      Value *cmp = bit_checks.at(curr_pow2);
       auto br_cond = make_unique<Branch>(*cmp, *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
-      cond->addInstr(std::move(and_pow2));
-      cond->addInstr(std::move(cmp));
       cond->addInstr(std::move(br_cond));
 
       auto &vec_type = get_vec_type(curr_pow2, elem_ty);
@@ -1594,22 +1606,18 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     curr_tree_nodes >>= 1u;
   }
 
-  auto unroll_cond = make_unique<BasicBlock>(prefix + "unroll_cond");
-  auto leq_unroll_cnt = make_unique<ICmp>(bool_ty, prefix + "leq_unroll_cnt", ICmp::Cond::ULE, len, f.getIntConst(unroll_cnt, idx_ty));
-  auto br = make_unique<Branch>(*leq_unroll_cnt, *tree_nodes_len_idx.at(unroll_cnt_bit_floor).at(0), f.getSinkBB());
-  unroll_cond->addInstr(std::move(leq_unroll_cnt));
-  unroll_cond->addInstr(std::move(br));
   auto &entry = *unroll_cond;
+  bit_checks_bb->addInstr(make_unique<Branch>(*tree_nodes_len_idx.at(unroll_cnt_bit_floor).at(0)));
+  replace_bbs.emplace(replace_bbs.begin(), std::move(bit_checks_bb));
   replace_bbs.emplace(replace_bbs.begin(), std::move(unroll_cond));
-
   return {std::move(replace_bbs), entry};
 }
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSwitch(Function &f, const BasicBlock &next_bb) const {
   auto &elem_ty = lambda->getType();
-  // if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
-  //   return replacementBBsMemset(f, next_bb);
-  // }
+  if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
+    return replacementBBsMemset(f, next_bb);
+  }
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
