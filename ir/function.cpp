@@ -14,7 +14,6 @@
 #include <set>
 #include <unordered_set>
 #include <bit>
-#include <ranges>
 
 using namespace smt;
 using namespace util;
@@ -1443,55 +1442,43 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     replace_bbs.emplace_back(std::move(cond));
   }
   auto &entry = *prev_cond;
-  Value *vec = nullptr;
+
+  std::vector<GEP*> geps;
+  std::vector<Value*> elems;
   for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
-    const uint64_t idx = len - 1;
-    IntConst &idx_const = f.getIntConst(idx, idx_ty);
+    IntConst &idx_const = f.getIntConst(len - 1, idx_ty);
     const auto suffix = '#' + to_string(len);
     auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
     auto map_len = make_unique<BasicBlock>(prefix + "map_len" + suffix);
     prev_cond->replaceTargetWith(&sink, cond.get());
+
+    auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    elem_gep->addIdx(elem_ty, idx_const);
+    geps.emplace_back(elem_gep.get());
+    cond->addInstr(std::move(elem_gep));
 
     std::vector<Value*> args;
     if (lambda_args & Idx) {
       args.emplace_back(&idx_const);
     }
     if (lambda_args & Elem) {
-      auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-      elem_gep->addIdx(elem_ty, idx_const);
-      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *elem_gep, align);
+      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *geps.back(), align);
       args.emplace_back(load_elem.get());
-      cond->addInstr(std::move(elem_gep));
       cond->addInstr(std::move(load_elem));
     }
     auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
-    Value *const elem = map_elem.get();
+    elems.emplace_back(map_elem.get());
     cond->addInstr(std::move(map_elem));
 
-    auto &vec_type = get_vec_type(len, elem_ty);
-    std::unique_ptr<Instr> new_vec;
-    if (vec != nullptr) {
-      auto vec_new_elem = make_unique<InsertElement>(vec->getType(), prefix + "vec_new_elem" + suffix, f.getPoison(vec->getType()), *elem, zero_idx);
-      auto r = std::views::iota(0u, static_cast<unsigned>(len));
-      new_vec = make_unique<ShuffleVector>(vec_type, prefix + "vec" + suffix, *vec, *vec_new_elem, std::vector<unsigned>(r.begin(), r.end()));
-      cond->addInstr(std::move(vec_new_elem));
-    } else {
-      // new_vec = make_unique<InsertElement>(vec_type, prefix + "vec" + suffix, f.getPoison(vec_type), *elem, zero_idx);
-      new_vec = make_unique<ConversionOp>(vec_type, prefix + "vec" + suffix, *elem, ConversionOp::BitCast);
-    }
     auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(len, idx_ty));
     auto br_cond = make_unique<Branch>(*cmp, *map_len, sink);
-    vec = new_vec.get();
-    cond->addInstr(std::move(new_vec));
     cond->addInstr(std::move(cmp));
     cond->addInstr(std::move(br_cond));
 
-    auto vec_gep = make_unique<GEP>(ptr->getType(), prefix + "vec_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(vec_type, zero_idx);
-    auto store_vec = make_unique<Store>(*vec_gep, *vec, align);
-
-    map_len->addInstr(std::move(vec_gep));
-    map_len->addInstr(std::move(store_vec));
+    for (uint64_t idx = 0; idx < len; idx++) {
+      auto store_elem = make_unique<Store>(*geps[idx], *elems[idx], align);
+      map_len->addInstr(std::move(store_elem));
+    }
     map_len->addInstr(make_unique<Branch>(next_bb));
 
     prev_cond = cond.get();
@@ -1551,8 +1538,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
         bit_checks_bb->addInstr(std::move(and_pow2));
         bit_checks_bb->addInstr(std::move(bit_cmp));
       }
-      Value *cmp = bit_checks.at(curr_pow2);
-      auto br_cond = make_unique<Branch>(*cmp, *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
+      auto br_cond = make_unique<Branch>(*bit_checks.at(curr_pow2), *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
       cond->addInstr(std::move(br_cond));
 
       std::vector<GEP*> geps;
@@ -1620,9 +1606,8 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   switch_len.addTarget(zero_idx, next_bb);
   const BasicBlock *prev_idx_bb = &next_bb;
   for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
-    const uint64_t idx = len - 1;
-    IntConst &idx_const = f.getIntConst(idx, idx_ty);
-    const auto suffix = '#' + to_string(idx);
+    IntConst &idx_const = f.getIntConst(len - 1, idx_ty);
+    const auto suffix = '#' + to_string(len);
     auto map_idx = make_unique<BasicBlock>(prefix + "map_idx" + suffix);
     switch_len.addTarget(f.getIntConst(len, idx_ty), *map_idx);
 
