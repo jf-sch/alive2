@@ -1584,7 +1584,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   return {std::move(replace_bbs), entry};
 }
 
-std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSwitch(Function &f, const BasicBlock &next_bb) const {
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
   auto &elem_ty = lambda->getType();
   if (lambda_args == None && elem_ty.isIntType() && elem_ty.bits() == bits_byte) {
     return replacementBBsMemset(f, next_bb);
@@ -1592,46 +1592,64 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
+  auto &bool_ty = get_int_type(1);
   auto &stop_idx_ty = stop_idx->getType();
+  auto &sink = f.getSinkBB();
 
-  auto cond = make_unique<BasicBlock>(prefix + "cond");
-  auto switch_instr = make_unique<Switch>(*stop_idx, f.getSinkBB());
-  auto &switch_len = *switch_instr;
-  cond->addInstr(std::move(switch_instr));
+  BasicBlock *prev_map;
+  {
+    const uint64_t len = 0;
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(0, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, next_bb, sink);
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+    prev_map = cond.get();
+    replace_bbs.emplace_back(std::move(cond));
+  }
+  auto &entry = *prev_map;
 
-  switch_len.addTarget(f.getIntConst(0, stop_idx_ty), next_bb);
-  const BasicBlock *prev_idx_bb = &next_bb;
+  const BasicBlock *prev_store = &next_bb;
   for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
     const uint64_t idx = len - 1;
     const auto suffix = '#' + to_string(len);
-    auto map_idx = make_unique<BasicBlock>(prefix + "map_idx" + suffix);
-    switch_len.addTarget(f.getIntConst(len, stop_idx_ty), *map_idx);
+    auto map_bb = make_unique<BasicBlock>(prefix + "map" + suffix);
+    auto store_bb = make_unique<BasicBlock>(prefix + "store" + suffix);
+    prev_map->replaceTargetWith(&sink, map_bb.get());
 
     auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
     elem_gep->addIdx(elem_ty, f.getIntConst(idx, bits_for_offset));
-    Value &gep = *elem_gep;
-    map_idx->addInstr(std::move(elem_gep));
+    GEP &gep = *elem_gep;
+    map_bb->addInstr(std::move(elem_gep));
 
     std::vector<Value*> args;
     if (lambda_args & Idx) {
       args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
     }
     if (lambda_args & Elem) {
-      auto load_elem = make_unique<Load>(elem_ty, prefix + "vec_extract" + suffix, gep, align);
+      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, gep, align);
       args.emplace_back(load_elem.get());
-      map_idx->addInstr(std::move(load_elem));
+      map_bb->addInstr(std::move(load_elem));
     }
     auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
-    auto store_elem = make_unique<Store>(gep, *map_elem, align);
-    map_idx->addInstr(std::move(map_elem));
-    map_idx->addInstr(std::move(store_elem));
-    map_idx->addInstr(make_unique<Branch>(*prev_idx_bb));
+    Value &elem = *map_elem;
+    map_bb->addInstr(std::move(map_elem));
 
-    prev_idx_bb = map_idx.get();
-    replace_bbs.emplace(replace_bbs.begin(), std::move(map_idx));
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(len, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, *store_bb, sink);
+    map_bb->addInstr(std::move(cmp));
+    map_bb->addInstr(std::move(br_cond));
+
+    auto store_vec = make_unique<Store>(gep, elem, align);
+    store_bb->addInstr(std::move(store_vec));
+    store_bb->addInstr(make_unique<Branch>(*prev_store));
+
+    prev_map = map_bb.get();
+    prev_store = store_bb.get();
+    replace_bbs.emplace_back(std::move(map_bb));
+    replace_bbs.emplace_back(std::move(store_bb));
   }
-  auto &entry = *cond;
-  replace_bbs.emplace(replace_bbs.begin(), std::move(cond));
   return {std::move(replace_bbs), entry};
 }
 

@@ -370,7 +370,7 @@ private:
 public:
   std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const;
   std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const;
-  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsSwitch(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const;
 
   friend std::ostream& operator<<(std::ostream &os, const Map &m);
 };
