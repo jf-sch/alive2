@@ -1354,6 +1354,7 @@ public:
 
   size_t numParams() const { return params.size(); }
   InlineFuncParam &paramAt(size_t idx, bool reversed = false) const { return *params.at(reversed ? (instrs.size() - idx - 1) : idx); }
+  Type &paramTypeAt(size_t idx, bool reversed = false) const { return paramAt(idx, reversed).getType(); }
   util::const_strip_unique_ptr<decltype(params)> getParams() const { return params; }
   void addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front = false);
   void delParam(const InlineFuncParam *i);
