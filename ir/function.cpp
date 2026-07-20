@@ -1442,7 +1442,6 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   }
   auto &entry = *prev_cond;
 
-  std::vector<GEP*> geps;
   std::vector<Value*> elems;
   for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
     const uint64_t idx = len - 1;
@@ -1451,18 +1450,16 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     auto map_len = make_unique<BasicBlock>(prefix + "map_len" + suffix);
     prev_cond->replaceTargetWith(&sink, cond.get());
 
-    auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    elem_gep->addIdx(elem_ty, f.getIntConst(idx, bits_for_offset));
-    geps.emplace_back(elem_gep.get());
-    cond->addInstr(std::move(elem_gep));
-
     std::vector<Value*> args;
     if (lambda_args & Idx) {
       args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
     }
     if (lambda_args & Elem) {
-      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *geps.back(), align);
+      auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      elem_gep->addIdx(elem_ty, f.getIntConst(idx, bits_for_offset));
+      auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix, *elem_gep, align);
       args.emplace_back(load_elem.get());
+      cond->addInstr(std::move(elem_gep));
       cond->addInstr(std::move(load_elem));
     }
     auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
@@ -1474,10 +1471,11 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     cond->addInstr(std::move(cmp));
     cond->addInstr(std::move(br_cond));
 
-    for (uint64_t idx = 0; idx < len; idx++) {
-      auto store_elem = make_unique<Store>(*geps[idx], *elems[idx], align);
-      map_len->addInstr(std::move(store_elem));
-    }
+    auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(get_vec_type(elems.size(), elem_ty), f.getIntConst(0, bits_for_offset));
+    auto store_vec = make_unique<StoreMultiple>(*vec_gep, elem_ty, std::vector(elems), align);
+    map_len->addInstr(std::move(vec_gep));
+    map_len->addInstr(std::move(store_vec));
     map_len->addInstr(make_unique<Branch>(next_bb));
 
     prev_cond = cond.get();
@@ -1538,34 +1536,33 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       auto br_cond = make_unique<Branch>(*bit_checks.at(curr_pow2), *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
       cond->addInstr(std::move(br_cond));
 
-      std::vector<GEP*> geps;
       std::vector<Value*> elems;
       for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
         const auto suffix3 = suffix2 + '#' + to_string(vec_idx);
         const uint64_t idx = base_idx + vec_idx;
-
-        auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-        elem_gep->addIdx(elem_ty, f.getIntConst(idx, bits_for_offset));
-        geps.emplace_back(elem_gep.get());
-        map_range->addInstr(std::move(elem_gep));
 
         std::vector<Value*> args;
         if (lambda_args & Idx) {
           args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
         }
         if (lambda_args & Elem) {
-          auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix3, *geps[vec_idx], align);
+          auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+          elem_gep->addIdx(elem_ty, f.getIntConst(idx, bits_for_offset));
+          auto load_elem = make_unique<Load>(elem_ty, prefix + "load_elem" + suffix3, *elem_gep, align);
           args.emplace_back(load_elem.get());
+          map_range->addInstr(std::move(elem_gep));
           map_range->addInstr(std::move(load_elem));
         }
         auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix3, std::move(args), *lambda);
         elems.emplace_back(map_elem.get());
         map_range->addInstr(std::move(map_elem));
       }
-      for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
-        auto store_elem = make_unique<Store>(*geps[vec_idx], *elems[vec_idx], align);
-        map_range->addInstr(std::move(store_elem));
-      }
+      auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      vec_gep->addIdx(elem_ty, f.getIntConst(base_idx, bits_for_offset));
+      vec_gep->addIdx(get_vec_type(elems.size(), elem_ty), f.getIntConst(0, bits_for_offset));
+      auto store_vec = make_unique<StoreMultiple>(*vec_gep, elem_ty, std::vector(elems), align);
+      map_range->addInstr(std::move(vec_gep));
+      map_range->addInstr(std::move(store_vec));
 
       const uint64_t next_idx = base_idx + curr_pow2;
       uint64_t next_len = std::min(curr_pow2 >> 1u, std::bit_floor(unroll_cnt - next_idx));

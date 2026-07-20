@@ -2322,6 +2322,29 @@ void Memory::store(const expr &p, const StateValue &v, const Type &type,
   store(ptr, to_store, undef_vars, align);
 }
 
+void Memory::store_multiple(const expr &p, const std::vector<std::pair<const StateValue*, const Type*>> vals_with_types,
+                            uint64_t align, const std::set<expr> &undef_vars) {
+  assert(!memory_unused());
+  Pointer ptr(*this, p);
+
+  // initializer stores are ok by construction
+  if (!state->isInitializationPhase()) {
+    unsigned total_store_byte_size = 0;
+    for (auto &[val, ty] : vals_with_types) {
+      total_store_byte_size += getStoreByteSize(*ty);
+    }
+    state->addUB(ptr.isDereferenceable(total_store_byte_size, align, true));
+  }
+
+  vector<pair<unsigned, expr>> to_store;
+  unsigned curr_offset = 0;
+  for (auto &[val, ty] : vals_with_types) {
+    store(*val, *ty, curr_offset, to_store);
+    curr_offset += getStoreByteSize(*ty);
+  }
+  store(ptr, to_store, undef_vars, align);
+}
+
 StateValue Memory::load(const Pointer &ptr, const Type &type, set<expr> &undef,
                         uint64_t align) {
   unsigned bytecount = getStoreByteSize(type);

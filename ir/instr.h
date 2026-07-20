@@ -990,6 +990,39 @@ public:
 };
 
 
+class StoreMultiple final : public MemInstr {
+  Value *ptr;
+  Type &elem_type;
+  std::vector<Value*> vals;
+  uint64_t align;
+public:
+  StoreMultiple(Value &ptr, Type &elem_type, std::vector<Value*> &&vals, uint64_t align)
+    : MemInstr(Type::voidTy, "store_mulitple"), ptr(&ptr), elem_type(elem_type), vals(std::move(vals)), align(align) {}
+
+  Value& getPtr() const { return *ptr; }
+  uint64_t getAlign() const { return align; }
+  Type& getStoreType() const;
+
+  size_t numVals() const { return vals.size(); };
+  auto getVals() const { return vals; };
+  Value& valAt(size_t idx, bool reversed = false) const { return *vals.at(reversed ? (vals.size() - idx - 1) : idx); }
+
+  std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
+  uint64_t getMaxAccessSize() const override;
+  uint64_t getMaxAccessStride() const;
+  uint64_t getMaxGEPOffset() const override;
+  ByteAccessInfo getByteAccessInfo() const override;
+
+  std::vector<Value*> operands() const override;
+  bool propagatesPoison() const override;
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override;
+  smt::expr getTypeConstraints(const Function &f) const override;
+  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+};
+
+
 class Memset final : public MemInstr {
   Value *ptr, *val, *bytes;
   uint64_t align;

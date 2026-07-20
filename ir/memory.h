@@ -327,8 +327,12 @@ public:
   void free(const smt::expr &ptr, bool unconstrained);
 
   static unsigned getStoreByteSize(const Type &ty);
+
   void store(const smt::expr &ptr, const StateValue &val, const Type &type,
              uint64_t align, const std::set<smt::expr> &undef_vars);
+  void store_multiple(const smt::expr &ptr, const std::vector<std::pair<const StateValue*, const Type*>> vals_with_types,
+                      uint64_t align, const std::set<smt::expr> &undef_vars);
+
   std::pair<StateValue, std::pair<smt::AndExpr, smt::expr>>
     load(const smt::expr &ptr, const Type &type, uint64_t align);
 

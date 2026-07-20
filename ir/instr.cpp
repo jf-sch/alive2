@@ -98,6 +98,20 @@ uint64_t getGlobalVarSize(const IR::Value *V) {
 
 namespace IR {
 
+static VectorType& get_vec_type(uint64_t elems, Type &ty) {
+  static std::unordered_map<Type*, std::unordered_map<uint64_t, std::unique_ptr<VectorType>>> type_map;
+  if (!type_map.contains(&ty)) {
+    type_map.try_emplace(&ty);
+  }
+  auto &len_map = type_map.at(&ty);
+  if (!len_map.contains(elems)) {
+    len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
+  }
+  return *len_map.at(elems);
+}
+
+
+
 expr Instr::getTypeConstraints() const {
   UNREACHABLE();
   return {};
@@ -4293,6 +4307,66 @@ unique_ptr<Instr> Store::dup(Function &f, const string &suffix) const {
 }
 
 
+DEFINE_AS_RETZEROALIGN(StoreMultiple, getMaxAllocSize)
+DEFINE_AS_RETZERO(StoreMultiple, getMaxGEPOffset)
+
+Type& StoreMultiple::getStoreType() const {
+  return get_vec_type(vals.size(), elem_type);
+}
+
+uint64_t StoreMultiple::getMaxAccessSize() const {
+  return round_up(Memory::getStoreByteSize(getStoreType()), align);
+}
+
+MemInstr::ByteAccessInfo StoreMultiple::getByteAccessInfo() const {
+  return ByteAccessInfo::get(getStoreType(), true, align);
+}
+
+vector<Value*> StoreMultiple::operands() const {
+  auto ops = vals;
+  ops.emplace_back(ptr);
+  return ops;
+}
+
+bool StoreMultiple::propagatesPoison() const {
+  return false;
+}
+
+void StoreMultiple::rauw(const Value &what, Value &with) {
+  RAUW(ptr);
+  for (size_t i = 0; i < vals.size(); i++) {
+    RAUW(vals[i]);
+  }
+}
+
+void StoreMultiple::print(ostream &os) const {
+  os << "store_multiple" << *ptr << ", align : [\n" << align;
+  for (auto val : vals) {
+    os << "  " << *val << ", \n";
+  }
+  os << ']';
+}
+
+StateValue StoreMultiple::toSMT(State &s) const {
+  auto &p = s.getWellDefinedPtr(*ptr);
+  check_can_store(s, p);
+  std::vector<std::pair<const StateValue*, const Type*>> vals_with_types;
+  for (auto val : vals) {
+    vals_with_types.emplace_back(&s[*val], &elem_type);
+  }
+  s.getMemory().store_multiple(p, vals_with_types, align, s.getUndefVars());
+  return {};
+}
+
+expr StoreMultiple::getTypeConstraints(const Function &f) const {
+  return ptr->getType().enforcePtrType();
+}
+
+unique_ptr<Instr> StoreMultiple::dup(Function &f, const string &suffix) const {
+  return make_unique<StoreMultiple>(*ptr, elem_type, std::vector(vals), align);
+}
+
+
 DEFINE_AS_RETZEROALIGN(Memset, getMaxAllocSize)
 DEFINE_AS_RETZERO(Memset, getMaxGEPOffset)
 
@@ -5319,8 +5393,8 @@ void InlineFuncCall::rauw(const Value &what, Value &with) {
     assert(new_func != nullptr);
     func = new_func;
   }
-  for (auto op : args) {
-    RAUW(op);
+  for (size_t i = 0; i < args.size(); i++) {
+    RAUW(args[i]);
   }
 }
 void InlineFuncCall::print(std::ostream &os) const {
