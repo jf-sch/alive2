@@ -4340,7 +4340,7 @@ void StoreMultiple::rauw(const Value &what, Value &with) {
 }
 
 void StoreMultiple::print(ostream &os) const {
-  os << "store_multiple" << *ptr << ", align : [\n" << align;
+  os << "store_multiple " << *ptr << ", align " << align << " : [\n";
   for (auto val : vals) {
     os << "  " << *val << ", \n";
   }

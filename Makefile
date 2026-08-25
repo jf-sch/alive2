@@ -23,5 +23,23 @@ $(BUILD_DIR)/build.ninja:
 clean:
 	@rm -rf $(BUILD_DIR)
 
-test:
+
+
+TEST_FILE =
+UNROLL_COUNT = 2
+TIMEOUT = 20
+
+ALIVE = $(BUILD_DIR)/alive-tv
+ALIVE_FLAGS = --src-unroll=$(UNROLL_COUNT) --tgt-unroll=$(UNROLL_COUNT) --smt-to=$(TIMEOUT)000
+# TEST_FLAGS = $(ALIVE_FLAGS)
+TEST_FLAGS = $(ALIVE_FLAGS) --quiet
+
+TEST_CMD = $(ALIVE) $(TEST_FILE) $(TEST_FLAGS)
+
+
+test: all
+ifeq ($(TEST_FILE),)
 	@cd $(BUILD_DIR) && ninja check
+else
+	@$(TEST_CMD)
+endif
