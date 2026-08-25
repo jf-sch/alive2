@@ -1230,12 +1230,18 @@ void Memory::store(const Pointer &ptr,
   if (data.empty())
     return;
 
+  unsigned bytes = data.size() * (bits_byte / 8);
+
+  // if (data.size() > 1 && !state->isInitializationPhase()) {
+  //   expr offset = expr::mkQVar(0, Pointer::bitsShortOffset());
+  //   storeLambda(ptr, offset, expr::mkUInt(bytes, bits_size_t), data, undef, align);
+  //   return;
+  // }
+
   for (auto &[offset, val] : data) {
     Byte byte(*this, expr(val));
     escapeLocalPtr(byte.ptrValue(), byte.isPtr() && byte.ptrNonpoison());
   }
-
-  unsigned bytes = data.size() * (bits_byte/8);
 
   auto stored_ty = data_type(data, false);
   auto stored_ty_full = data_type(data, true);
@@ -1296,6 +1302,9 @@ void Memory::storeLambda(const Pointer &ptr, const expr &offset,
                          const vector<pair<unsigned, expr>> &data,
                          const set<expr> &undef, uint64_t align) {
   assert(!state->isInitializationPhase());
+  if (data.empty()) {
+    return;
+  }
 
   const unsigned bytesz = bits_byte / 8;
   bool val_no_offset = data.size() == 1 && !data[0].second.vars().count(offset);
@@ -1303,10 +1312,19 @@ void Memory::storeLambda(const Pointer &ptr, const expr &offset,
   expr ptr_offset = offset - ptr.getShortOffset();
 
   expr val = data.back().second;
-  expr mod = expr::mkUInt(data.size(), offset);
-  for (auto I = next(data.rbegin()), E = data.rend(); I != E; ++I) {
-    assert(I->first % bytesz == 0);
-    val = expr::mkIf(ptr_offset.urem(mod) == I->first / bytesz, I->second, val);
+  uint64_t bytes_const;
+  if (bytes.isUInt(bytes_const) && bytes_const == data.size() * bytesz) {
+    for (auto I = next(data.rbegin()), E = data.rend(); I != E; ++I) {
+      assert(I->first % bytesz == 0);
+      val = expr::mkIf(ptr_offset == I->first / bytesz, I->second, val);
+    }
+  } else {
+    expr mod = expr::mkUInt(data.size(), ptr_offset);
+    expr ptr_offset_rem = ptr_offset.urem(mod);
+    for (auto I = next(data.rbegin()), E = data.rend(); I != E; ++I) {
+      assert(I->first % bytesz == 0);
+      val = expr::mkIf(ptr_offset_rem == I->first / bytesz, I->second, val);
+    }
   }
 
   auto fn = [&](MemBlock &blk, const Pointer &ptr, unsigned bid, bool local,
