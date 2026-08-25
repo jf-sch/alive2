@@ -1297,13 +1297,16 @@ void Memory::storeLambda(const Pointer &ptr, const expr &offset,
                          const set<expr> &undef, uint64_t align) {
   assert(!state->isInitializationPhase());
 
+  const unsigned bytesz = bits_byte / 8;
   bool val_no_offset = data.size() == 1 && !data[0].second.vars().count(offset);
   auto stored_ty = data_type(data, false);
+  expr ptr_offset = offset - ptr.getShortOffset();
 
   expr val = data.back().second;
   expr mod = expr::mkUInt(data.size(), offset);
   for (auto I = next(data.rbegin()), E = data.rend(); I != E; ++I) {
-    val = expr::mkIf(offset.urem(mod) == I->first, I->second, val);
+    assert(I->first % bytesz == 0);
+    val = expr::mkIf(ptr_offset.urem(mod) == I->first / bytesz, I->second, val);
   }
 
   auto fn = [&](MemBlock &blk, const Pointer &ptr, unsigned bid, bool local,
