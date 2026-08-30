@@ -344,7 +344,7 @@ private:
   bool idx_nsw, idx_nuw;
 
 public:
-  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, Type &idx_type, LambdaArgs lambda_args);
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, Type *idx_type = nullptr, Type *elem_type = nullptr);
 
   Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, LambdaArgs lambda_args,
       bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
