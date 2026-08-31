@@ -21,29 +21,6 @@ using namespace std;
 
 namespace IR {
 
-
-
-static IntType& get_int_type(uint64_t bits) {
-  static std::unordered_map<uint64_t, std::unique_ptr<IntType>> type_map;
-  if (!type_map.contains(bits)) {
-    type_map.emplace(bits, make_unique<IntType>("i" + to_string(bits), bits));
-  }
-  return *type_map.at(bits);
-}
-static VectorType& get_vec_type(uint64_t elems, Type &ty) {
-  static std::unordered_map<Type*, std::unordered_map<uint64_t, std::unique_ptr<VectorType>>> type_map;
-  if (!type_map.contains(&ty)) {
-    type_map.try_emplace(&ty);
-  }
-  auto &len_map = type_map.at(&ty);
-  if (!len_map.contains(elems)) {
-    len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
-  }
-  return *len_map.at(elems);
-}
-
-
-
 void BasicBlock::setInstrs(std::vector<std::unique_ptr<Instr>> &&instrs) {
   m_instrs = std::move(instrs);
 }
@@ -334,7 +311,7 @@ IntConst& Function::getIntConst(int64_t val, Type &ty) {
   return *val_map.at(val);
 }
 IntConst& Function::getIntConst(int64_t val, uint64_t bits) {
-  return getIntConst(val, get_int_type(bits));
+  return getIntConst(val, IntType::get(bits));
 }
 PoisonValue& Function::getPoison(Type &ty) {
   auto val = make_unique<PoisonValue>(ty);
@@ -1383,7 +1360,7 @@ std::tuple<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&, Value&> Map::u
   prev_idx->addValue(f.getIntConst(-1, idx_ty), std::string(loop_entry->getName()));
   auto idx = make_unique<BinOp>(idx_ty, prefix + "idx", *prev_idx, f.getIntConst(1, idx_ty), BinOp::Op::Add);
   prev_idx->addValue(*idx, std::string(loop->getName()));
-  auto cmp = make_unique<ICmp>(get_int_type(1), prefix + "eq_len", ICmp::Cond::EQ, *idx, *stop_idx);
+  auto cmp = make_unique<ICmp>(IntType::get(1), prefix + "eq_len", ICmp::Cond::EQ, *idx, *stop_idx);
   auto br_cond = make_unique<Branch>(*cmp, next_bb, *loop);
 
   Value &len = *idx;
@@ -1425,7 +1402,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
-  auto &bool_ty = get_int_type(1);
+  auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
   auto &sink = f.getSinkBB();
 
@@ -1475,7 +1452,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     cond->addInstr(std::move(br_cond));
 
     auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
-    vec_gep->addIdx(get_vec_type(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
+    vec_gep->addIdx(VectorType::get(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
     auto store_vec = make_unique<StoreMultiple>(*vec_gep, store_ty, std::vector(elems), align);
     map_len->addInstr(std::move(vec_gep));
     map_len->addInstr(std::move(store_vec));
@@ -1496,7 +1473,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
-  auto &bool_ty = get_int_type(1);
+  auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
   const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
   const uint64_t leaf_tree_nodes = unroll_cnt_bit_floor << 1u;
@@ -1564,7 +1541,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
       }
       auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
       vec_gep->addIdx(store_ty, f.getIntConst(base_idx, bits_for_offset));
-      vec_gep->addIdx(get_vec_type(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
+      vec_gep->addIdx(VectorType::get(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
       auto store_vec = make_unique<StoreMultiple>(*vec_gep, store_ty, std::move(elems), align);
       map_range->addInstr(std::move(vec_gep));
       map_range->addInstr(std::move(store_vec));
@@ -1594,7 +1571,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = name + '_';
-  auto &bool_ty = get_int_type(1);
+  auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
   auto &sink = f.getSinkBB();
 

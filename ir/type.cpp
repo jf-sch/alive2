@@ -333,6 +333,14 @@ void VoidType::print(ostream &os) const {
 }
 
 
+IntType& IntType::get(uint64_t bits) {
+  static std::unordered_map<uint64_t, std::unique_ptr<IntType>> type_map;
+  if (!type_map.contains(bits)) {
+    type_map.emplace(bits, make_unique<IntType>("i" + to_string(bits), bits));
+  }
+  return *type_map.at(bits);
+}
+
 unsigned IntType::maxSubBitAccess() const {
   if (!defined)
     return 63;
@@ -1092,6 +1100,18 @@ void ArrayType::print(ostream &os) const {
   }
 }
 
+
+VectorType& VectorType::get(uint64_t elems, Type &ty) {
+  static std::unordered_map<Type*, std::unordered_map<uint64_t, std::unique_ptr<VectorType>>> type_map;
+  if (!type_map.contains(&ty)) {
+    type_map.try_emplace(&ty);
+  }
+  auto &len_map = type_map.at(&ty);
+  if (!len_map.contains(elems)) {
+    len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
+  }
+  return *len_map.at(elems);
+}
 
 VectorType::VectorType(string &&name, unsigned elements, Type &elementTy)
   : AggregateType(std::move(name), false) {

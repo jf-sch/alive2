@@ -158,6 +158,8 @@ class IntType final : public Type {
   bool defined = false;
 
 public:
+  static IntType& get(uint64_t bits);
+
   IntType(std::string &&name) : Type(std::move(name)) {}
   IntType(std::string &&name, unsigned bitwidth)
     : Type(std::move(name)), bitwidth(bitwidth), defined(true) {}
@@ -337,6 +339,8 @@ public:
 
 class VectorType final : public AggregateType {
 public:
+  static VectorType& get(uint64_t elems, Type &ty);
+
   VectorType(std::string &&name) : AggregateType(std::move(name)) {}
   VectorType(std::string &&name, unsigned elements, Type &elementTy);
 
