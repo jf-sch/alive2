@@ -1001,7 +1001,7 @@ public:
 
   Value& getPtr() const { return *ptr; }
   uint64_t getAlign() const { return align; }
-  Type& getStoreType() const;
+  Type& getStoreType() const { return VectorType::get(vals.size(), elem_type); }
 
   size_t numVals() const { return vals.size(); };
   auto getVals() const { return vals; };

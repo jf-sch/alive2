@@ -98,20 +98,6 @@ uint64_t getGlobalVarSize(const IR::Value *V) {
 
 namespace IR {
 
-static VectorType& get_vec_type(uint64_t elems, Type &ty) {
-  static std::unordered_map<Type*, std::unordered_map<uint64_t, std::unique_ptr<VectorType>>> type_map;
-  if (!type_map.contains(&ty)) {
-    type_map.try_emplace(&ty);
-  }
-  auto &len_map = type_map.at(&ty);
-  if (!len_map.contains(elems)) {
-    len_map.emplace(elems, make_unique<VectorType>("v" + to_string(elems), elems, ty));
-  }
-  return *len_map.at(elems);
-}
-
-
-
 expr Instr::getTypeConstraints() const {
   UNREACHABLE();
   return {};
@@ -4309,10 +4295,6 @@ unique_ptr<Instr> Store::dup(Function &f, const string &suffix) const {
 
 DEFINE_AS_RETZEROALIGN(StoreMultiple, getMaxAllocSize)
 DEFINE_AS_RETZERO(StoreMultiple, getMaxGEPOffset)
-
-Type& StoreMultiple::getStoreType() const {
-  return get_vec_type(vals.size(), elem_type);
-}
 
 uint64_t StoreMultiple::getMaxAccessSize() const {
   return round_up(Memory::getStoreByteSize(getStoreType()), align);
