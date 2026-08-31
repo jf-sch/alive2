@@ -5292,21 +5292,6 @@ std::vector<Value*> InlineFunc::operands() const {
   return ops;
 }
 
-bool InlineFunc::propagatesPoison() const {
-  bool poison = false;
-  for (auto &i : instrs) {
-    poison = poison && i->propagatesPoison();
-  }
-  return poison;
-}
-bool InlineFunc::hasSideEffects() const {
-  bool side_effects = false;
-  for (auto &i : instrs) {
-    side_effects = side_effects && i->hasSideEffects();
-  }
-  return side_effects;
-}
-
 void InlineFunc::rauw(const Value &what, Value &with) {
   for (auto &i : instrs) {
     i->rauw(what, with);
@@ -5368,6 +5353,20 @@ std::vector<Value*> InlineFuncCall::operands() const {
     ops.emplace_back(op);
   }
   return ops;
+}
+bool InlineFuncCall::propagatesPoison() const {
+  bool poison = false;
+  for (auto &i : func->getInstrs()) {
+    poison = poison || i.propagatesPoison();
+  }
+  return poison;
+}
+bool InlineFuncCall::hasSideEffects() const {
+  bool side_effects = false;
+  for (auto &i : func->getInstrs()) {
+    side_effects = side_effects || i.hasSideEffects();
+  }
+  return side_effects;
 }
 void InlineFuncCall::rauw(const Value &what, Value &with) {
   if (func == &what) {
@@ -5437,8 +5436,21 @@ uint64_t Map::getMaxAccessSize() const {
 }
 
 MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
+  ByteAccessInfo info;
   const Type &store_ty = lambda->getType();
-  return ByteAccessInfo::anyType(gcd(align, getCommonAccessSize(store_ty)));
+  info.hasIntByteAccess = store_ty.enforcePtrOrVectorType().isFalse();
+  info.doesPtrStore = hasPtr(store_ty);
+  info.byteSize = gcd(align, getCommonAccessSize(store_ty));
+  info.subByteAccess = store_ty.maxSubBitAccess();
+
+  if (lambda_args & Elem) {
+    const Type &load_ty = lambda->paramTypeAt((lambda_args & Idx) ? 1 : 0);
+    assert(load_ty.bits() == store_ty.bits());
+    info.hasIntByteAccess = info.hasIntByteAccess && load_ty.enforcePtrOrVectorType().isFalse();
+    info.doesPtrLoad = hasPtr(load_ty);
+    info.subByteAccess = std::max(info.subByteAccess, load_ty.maxSubBitAccess());
+  }
+  return info;
 }
 
 std::vector<Value*> Map::operands() const {

@@ -1406,13 +1406,13 @@ public:
   UsersTy getUsers() const;
   std::vector<Value*> operands() const override;
 
-  bool propagatesPoison() const override;
-  bool hasSideEffects() const override;
+  bool propagatesPoison() const override { return false; }
+  bool hasSideEffects() const override { return false; }
   void rauw(const Value &what, Value &with) override;
   void print(std::ostream &os) const override;
 
-  StateValue toSMT(State &s) const override { UNREACHABLE(); }
-  smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
+  StateValue toSMT(State &s) const override { return {}; }
+  smt::expr getTypeConstraints(const Function &f) const override { return true; }
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
   std::vector<std::unique_ptr<Instr>> bodyInstrs(Function &f, const std::string &suffix) const;
 };
@@ -1433,8 +1433,8 @@ public:
   Value& argAt(size_t idx, bool reversed = false) const { return *args.at(reversed ? (args.size() - idx - 1) : idx); }
 
   std::vector<Value*> operands() const override;
-  bool propagatesPoison() const override { return func->propagatesPoison(); };
-  bool hasSideEffects() const override { return func->hasSideEffects(); }
+  bool propagatesPoison() const override;
+  bool hasSideEffects() const override;
   void rauw(const Value &what, Value &with) override;
   void print(std::ostream &os) const override;
 
