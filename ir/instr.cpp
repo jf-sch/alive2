@@ -5415,4 +5415,328 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
   return {std::move(replace_instrs), replace_val};
 }
 
+
+
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, Type *idx_type, Type *elem_type) {
+  auto lambda = make_unique<InlineFunc>(ret_type, "lambda");
+  if (idx_type != nullptr) {
+    lambda->addParam(make_unique<InlineFuncParam>(*idx_type, "idx"));
+  }
+  if (elem_type != nullptr) {
+    assert(elem_type->bits() == ret_type.bits());
+    lambda->addParam(make_unique<InlineFuncParam>(*elem_type, "elem"));
+  }
+  return lambda;
+}
+
+DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
+DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
+
+uint64_t Map::getMaxAccessSize() const {
+  return getIntOr(*stop_idx, UINT64_MAX);
+}
+
+MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
+  const Type &store_ty = lambda->getType();
+  return ByteAccessInfo::anyType(gcd(align, getCommonAccessSize(store_ty)));
+}
+
+std::vector<Value*> Map::operands() const {
+  std::vector<Value*> ops = {lambda};
+  for (auto op : {ptr, stop_idx}) {
+    ops.emplace_back(op);
+  }
+  return ops;
+}
+
+void Map::rauw(const Value &what, Value &with) {
+  if (lambda == &what) {
+    auto new_lambda = dynamic_cast<InlineFunc*>(&with);
+    assert(new_lambda != nullptr);
+    lambda = new_lambda;
+  }
+  for (auto op : {ptr, stop_idx}) {
+    RAUW(op);
+  }
+}
+
+void Map::print(std::ostream &os) const {
+  os << "map " << *ptr << " align " << align << " [" << '0' << ':' << *stop_idx << ':' << '1' << "] " << lambda->getName();
+}
+
+StateValue Map::toSMT(State &s) const {
+  return {};
+}
+
+expr Map::getTypeConstraints(const Function &f) const {
+  return ptr->getType().enforcePtrType() &&
+         stop_idx->getType().enforceIntType();
+}
+
+unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
+  return make_unique<Map>(getName() + suffix, unroll_cnt, *ptr, align, *stop_idx, *lambda, lambda_args, gep_inbounds, gep_nusw, gep_nuw);
+}
+
+
+
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsMemset(Function &f, const BasicBlock &next_bb) const {
+  auto &store_ty = lambda->getType();
+  assert(lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte);
+
+  std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
+  const auto prefix = getName() + '_';
+  auto bb = make_unique<BasicBlock>(prefix + "memset");
+  auto val = make_unique<InlineFuncCall>(prefix + "get_val", std::vector<Value*>{}, *lambda);
+  auto memset = make_unique<Memset>(*ptr, *val, *stop_idx, align, TailCallInfo{.type = TailCallInfo::Tail});
+
+  bb->addInstr(std::move(val));
+  bb->addInstr(std::move(memset));
+  bb->addInstr(make_unique<Branch>(next_bb));
+  BasicBlock &entry = *bb;
+  replace_bbs.emplace_back(std::move(bb));
+  return {std::move(replace_bbs), entry};
+}
+
+
+
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const {
+  auto &store_ty = lambda->getType();
+  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+    return replacementBBsMemset(f, next_bb);
+  }
+
+  std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
+  const auto prefix = getName() + '_';
+  auto &bool_ty = IntType::get(1);
+  auto &stop_idx_ty = stop_idx->getType();
+  auto &sink = f.getSinkBB();
+
+  BasicBlock *prev_cond;
+  {
+    const uint64_t len = 0;
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(0, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, next_bb, sink);
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+    prev_cond = cond.get();
+    replace_bbs.emplace_back(std::move(cond));
+  }
+  auto &entry = *prev_cond;
+
+  std::vector<Value*> elems;
+  for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
+    const uint64_t idx = len - 1;
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    auto map_len = make_unique<BasicBlock>(prefix + "map_len" + suffix);
+    prev_cond->replaceTargetWith(&sink, cond.get());
+
+    std::vector<Value*> args;
+    if (lambda_args & Idx) {
+      args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+    }
+    if (lambda_args & Elem) {
+      auto &load_ty = lambda->paramTypeAt(args.size());
+      assert(load_ty.bits() == store_ty.bits());
+      auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
+      auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, *elem_gep, align);
+      args.emplace_back(load_elem.get());
+      cond->addInstr(std::move(elem_gep));
+      cond->addInstr(std::move(load_elem));
+    }
+    auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
+    elems.emplace_back(map_elem.get());
+    cond->addInstr(std::move(map_elem));
+
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(len, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, *map_len, sink);
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+
+    auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    vec_gep->addIdx(VectorType::get(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
+    auto store_vec = make_unique<StoreMultiple>(*vec_gep, store_ty, std::vector(elems), align);
+    map_len->addInstr(std::move(vec_gep));
+    map_len->addInstr(std::move(store_vec));
+    map_len->addInstr(make_unique<Branch>(next_bb));
+
+    prev_cond = cond.get();
+    replace_bbs.emplace_back(std::move(cond));
+    replace_bbs.emplace_back(std::move(map_len));
+  }
+  return {std::move(replace_bbs), entry};
+}
+
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
+  auto &store_ty = lambda->getType();
+  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+    return replacementBBsMemset(f, next_bb);
+  }
+
+  std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
+  const auto prefix = getName() + '_';
+  auto &bool_ty = IntType::get(1);
+  auto &stop_idx_ty = stop_idx->getType();
+  const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
+  const uint64_t leaf_tree_nodes = unroll_cnt_bit_floor << 1u;
+
+  auto unroll_cond = make_unique<BasicBlock>(prefix + "unroll_cond");
+  auto bit_checks_bb = make_unique<BasicBlock>(prefix + "bit_checks");
+  auto leq_unroll_cnt = make_unique<ICmp>(bool_ty, prefix + "leq_unroll_cnt", ICmp::Cond::ULE, *stop_idx, f.getIntConst(unroll_cnt, stop_idx_ty));
+  auto br_unroll_cond = make_unique<Branch>(*leq_unroll_cnt, *bit_checks_bb, f.getSinkBB());
+  unroll_cond->addInstr(std::move(leq_unroll_cnt));
+  unroll_cond->addInstr(std::move(br_unroll_cond));
+
+  uint64_t curr_tree_nodes = leaf_tree_nodes;
+  curr_tree_nodes >>= 1u;
+  std::unordered_map<uint64_t, Value*> bit_checks;
+  std::unordered_map<uint64_t, std::unordered_map<uint64_t, const BasicBlock*>> tree_nodes_len_idx;
+  tree_nodes_len_idx.try_emplace(0);
+  for (uint64_t idx = 0; idx < unroll_cnt + 1; idx++) {
+    tree_nodes_len_idx.at(0).emplace(idx, &next_bb);
+  }
+  for (uint64_t curr_pow2 = 1; curr_pow2 < unroll_cnt_bit_floor + 1; curr_pow2 <<= 1u) {
+    tree_nodes_len_idx.try_emplace(curr_pow2);
+    const auto suffix = '#' + to_string(curr_pow2);
+
+    for (uint64_t curr_node = 0; curr_node < curr_tree_nodes; curr_node++) {
+      const uint64_t base_idx = curr_node * (curr_pow2 << 1u);
+      if (base_idx + curr_pow2 > unroll_cnt) {
+        break;
+      }
+      const auto suffix2 = suffix + '#' + to_string(curr_node);
+      auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix2);
+      auto map_range = make_unique<BasicBlock>(prefix + "map_range" + suffix2);
+
+      if (!bit_checks.contains(curr_pow2)) {
+        auto and_pow2 = make_unique<BinOp>(stop_idx_ty, prefix + "and" + suffix2, *stop_idx, f.getIntConst(curr_pow2, stop_idx_ty), BinOp::Op::And);
+        auto bit_cmp = make_unique<ICmp>(bool_ty, prefix + "eq_zero" + suffix2, ICmp::Cond::EQ, *and_pow2, f.getIntConst(0, stop_idx_ty));
+        bit_checks.emplace(curr_pow2, bit_cmp.get());
+        bit_checks_bb->addInstr(std::move(and_pow2));
+        bit_checks_bb->addInstr(std::move(bit_cmp));
+      }
+      auto br_cond = make_unique<Branch>(*bit_checks.at(curr_pow2), *tree_nodes_len_idx.at(curr_pow2 >> 1u).at(base_idx), *map_range);
+      cond->addInstr(std::move(br_cond));
+
+      std::vector<Value*> elems;
+      for (uint64_t vec_idx = 0; vec_idx < curr_pow2; vec_idx++) {
+        const auto suffix3 = suffix2 + '#' + to_string(vec_idx);
+        const uint64_t idx = base_idx + vec_idx;
+
+        std::vector<Value*> args;
+        if (lambda_args & Idx) {
+          args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+        }
+        if (lambda_args & Elem) {
+          auto &load_ty = lambda->paramTypeAt(args.size());
+          assert(load_ty.bits() == store_ty.bits());
+          auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+          elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
+          auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix3, *elem_gep, align);
+          args.emplace_back(load_elem.get());
+          map_range->addInstr(std::move(elem_gep));
+          map_range->addInstr(std::move(load_elem));
+        }
+        auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix3, std::move(args), *lambda);
+        elems.emplace_back(map_elem.get());
+        map_range->addInstr(std::move(map_elem));
+      }
+      auto vec_gep = make_unique<GEP>(ptr->getType(), "vec_gep", *ptr, gep_inbounds, gep_nusw, gep_nuw);
+      vec_gep->addIdx(store_ty, f.getIntConst(base_idx, bits_for_offset));
+      vec_gep->addIdx(VectorType::get(elems.size(), store_ty), f.getIntConst(0, bits_for_offset));
+      auto store_vec = make_unique<StoreMultiple>(*vec_gep, store_ty, std::move(elems), align);
+      map_range->addInstr(std::move(vec_gep));
+      map_range->addInstr(std::move(store_vec));
+
+      const uint64_t next_idx = base_idx + curr_pow2;
+      uint64_t next_len = std::min(curr_pow2 >> 1u, std::bit_floor(unroll_cnt - next_idx));
+      map_range->addInstr(make_unique<Branch>(*tree_nodes_len_idx.at(next_len).at(next_idx)));
+      tree_nodes_len_idx.at(curr_pow2).emplace(base_idx, cond.get());
+      replace_bbs.emplace(replace_bbs.begin(), std::move(map_range));
+      replace_bbs.emplace(replace_bbs.begin(), std::move(cond));
+    }
+    curr_tree_nodes >>= 1u;
+  }
+
+  auto &entry = *unroll_cond;
+  bit_checks_bb->addInstr(make_unique<Branch>(*tree_nodes_len_idx.at(unroll_cnt_bit_floor).at(0)));
+  replace_bbs.emplace(replace_bbs.begin(), std::move(bit_checks_bb));
+  replace_bbs.emplace(replace_bbs.begin(), std::move(unroll_cond));
+  return {std::move(replace_bbs), entry};
+}
+
+std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
+  auto &store_ty = lambda->getType();
+  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+    return replacementBBsMemset(f, next_bb);
+  }
+
+  std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
+  const auto prefix = getName() + '_';
+  auto &bool_ty = IntType::get(1);
+  auto &stop_idx_ty = stop_idx->getType();
+  auto &sink = f.getSinkBB();
+
+  BasicBlock *prev_map;
+  {
+    const uint64_t len = 0;
+    const auto suffix = '#' + to_string(len);
+    auto cond = make_unique<BasicBlock>(prefix + "cond" + suffix);
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(0, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, next_bb, sink);
+    cond->addInstr(std::move(cmp));
+    cond->addInstr(std::move(br_cond));
+    prev_map = cond.get();
+    replace_bbs.emplace_back(std::move(cond));
+  }
+  auto &entry = *prev_map;
+
+  const BasicBlock *prev_store = &next_bb;
+  for (uint64_t len = 1; len < unroll_cnt + 1; len++) {
+    const uint64_t idx = len - 1;
+    const auto suffix = '#' + to_string(len);
+    auto map_bb = make_unique<BasicBlock>(prefix + "map" + suffix);
+    auto store_bb = make_unique<BasicBlock>(prefix + "store" + suffix);
+    prev_map->replaceTargetWith(&sink, map_bb.get());
+
+    auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+    elem_gep->addIdx(store_ty, f.getIntConst(idx, bits_for_offset));
+    GEP &gep = *elem_gep;
+    map_bb->addInstr(std::move(elem_gep));
+
+    std::vector<Value*> args;
+    if (lambda_args & Idx) {
+      args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+    }
+    if (lambda_args & Elem) {
+      auto &load_ty = lambda->paramTypeAt(args.size());
+      assert(load_ty.bits() == store_ty.bits());
+      auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, gep, align);
+      args.emplace_back(load_elem.get());
+      map_bb->addInstr(std::move(load_elem));
+    }
+    auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
+    Value &elem = *map_elem;
+    map_bb->addInstr(std::move(map_elem));
+
+    auto cmp = make_unique<ICmp>(bool_ty, prefix + "eq_len" + suffix, ICmp::Cond::EQ, *stop_idx, f.getIntConst(len, stop_idx_ty));
+    auto br_cond = make_unique<Branch>(*cmp, *store_bb, sink);
+    map_bb->addInstr(std::move(cmp));
+    map_bb->addInstr(std::move(br_cond));
+
+    auto store_vec = make_unique<Store>(gep, elem, align);
+    store_bb->addInstr(std::move(store_vec));
+    store_bb->addInstr(make_unique<Branch>(*prev_store));
+
+    prev_map = map_bb.get();
+    prev_store = store_bb.get();
+    replace_bbs.emplace_back(std::move(map_bb));
+    replace_bbs.emplace_back(std::move(store_bb));
+  }
+  return {std::move(replace_bbs), entry};
+}
+
 }

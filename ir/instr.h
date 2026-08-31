@@ -1444,4 +1444,57 @@ public:
   std::pair<std::vector<std::unique_ptr<Instr>>, Value&> replacementInstrs(Function &f) const;
 };
 
+
+
+class Map final : public MemInstr {
+public:
+  enum LambdaArgs { None = 0, Idx = 1u << 0u, Elem = 1u << 1u, IdxElem = Idx | Elem };
+
+private:
+  uint64_t unroll_cnt;
+  Value *ptr;
+  uint64_t align;
+  Value *stop_idx;    // idx_step = 1
+  InlineFunc *lambda;
+  LambdaArgs lambda_args;
+  bool gep_inbounds, gep_nusw, gep_nuw;
+  bool idx_nsw, idx_nuw;
+
+public:
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, Type *idx_type = nullptr, Type *elem_type = nullptr);
+
+  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, LambdaArgs lambda_args,
+      bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
+    : MemInstr(Type::voidTy, std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), stop_idx(&stop_idx), lambda(&lambda), lambda_args(lambda_args),
+      gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw), idx_nsw(false), idx_nuw(false) {};
+
+  auto& getPtr() const { return *ptr; }
+  auto& getStopIdx() const { return *stop_idx; }
+  auto& getIdxType() const { return stop_idx->getType(); }
+  auto& getLambda() const { return *lambda; }
+  auto getLambdaArgs() const { return lambda_args; }
+  auto getAlign() const { return align; }
+  auto getUnrollCnt() const { return unroll_cnt; }
+
+  std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
+  uint64_t getMaxAccessSize() const override;
+  uint64_t getMaxGEPOffset() const override;
+  ByteAccessInfo getByteAccessInfo() const override;
+
+  std::vector<Value*> operands() const override;
+  bool propagatesPoison() const override { return false; }
+  void rauw(const Value &what, Value &with) override;
+  void print(std::ostream &os) const override;
+  StateValue toSMT(State &s) const override;
+  smt::expr getTypeConstraints(const Function &f) const override;
+  std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
+
+private:
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsMemset(Function &f, const BasicBlock &next_bb) const;
+public:
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const;
+  std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const;
+};
+
 }
