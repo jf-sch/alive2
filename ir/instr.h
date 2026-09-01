@@ -1413,8 +1413,8 @@ public:
 
   StateValue toSMT(State &s) const override { return {}; }
   smt::expr getTypeConstraints(const Function &f) const override { return true; }
+  smt::expr getTypeConstraintsCall(const Function &f) const;
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
-  std::vector<std::unique_ptr<Instr>> bodyInstrs(Function &f, const std::string &suffix) const;
 };
 
 
@@ -1429,7 +1429,7 @@ public:
 
   const auto& getFunc() const { return *func; };
   size_t numArgs() const { return args.size(); };
-  auto getArgs() const { return args; };
+  const auto& getArgs() const { return args; };
   Value& argAt(size_t idx, bool reversed = false) const { return *args.at(reversed ? (args.size() - idx - 1) : idx); }
 
   std::vector<Value*> operands() const override;
@@ -1439,7 +1439,7 @@ public:
   void print(std::ostream &os) const override;
 
   StateValue toSMT(State &s) const override { UNREACHABLE(); }
-  smt::expr getTypeConstraints(const Function &f) const override { UNREACHABLE(); }
+  smt::expr getTypeConstraints(const Function &f) const override;
   std::unique_ptr<Instr> dup(Function &f, const std::string &suffix) const override;
   std::pair<std::vector<std::unique_ptr<Instr>>, Value&> replacementInstrs(Function &f) const;
 };
@@ -1472,7 +1472,9 @@ public:
   auto& getStopIdx() const { return *stop_idx; }
   auto& getIdxType() const { return stop_idx->getType(); }
   auto& getLambda() const { return *lambda; }
-  auto getLambdaArgs() const { return lambda_args; }
+  const auto& getLambdaArgs() const { return lambda_args; }
+  auto lambdaArgAt(size_t idx, bool reversed = false) const { return *std::next(lambda_args.begin(), reversed ? (lambda_args.size() - idx - 1) : idx); }
+  std::pair<bool, uint64_t> lambdaArgsContains(LambdaArg arg) const;
   auto getAlign() const { return align; }
   auto getUnrollCnt() const { return unroll_cnt; }
 

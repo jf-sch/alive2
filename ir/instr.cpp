@@ -5321,6 +5321,23 @@ void InlineFunc::print(std::ostream &os) const {
   os << "}";
 }
 
+smt::expr InlineFunc::getTypeConstraintsCall(const Function &f) const {
+  auto constr = getType() == getReturnType();
+  for (auto &i : params) {
+    constr &= i->getTypeConstraints();
+  }
+  for (auto &i : instrs) {
+    assert(dynamic_cast<const JumpInstr*>(i.get()) == nullptr);
+    if (auto ret = dynamic_cast<const Return*>(i.get())) {
+      constr &= ret->getType().getTypeConstraints() &&
+                ret->getType() == ret->getVal().getType();
+      break;
+    }
+    constr &= i->getTypeConstraints(f);
+  }
+  return constr;
+}
+
 std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
   auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
   for (auto &i : params) {
@@ -5336,18 +5353,6 @@ std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) c
     new_func->rauw(instrAt(i), new_func->instrAt(i));
   }
   return new_func;
-}
-std::vector<std::unique_ptr<Instr>> InlineFunc::bodyInstrs(Function &f, const std::string &suffix) const {
-  std::vector<std::unique_ptr<Instr>> instrs_cpy;
-  for (auto &i : instrs) {
-    instrs_cpy.emplace_back(i->dup(f, suffix));
-  }
-  for (auto &I : instrs_cpy) {
-    for (size_t i = 0; i < numInstrs(); i++) {
-      I->rauw(instrAt(i), *instrs_cpy[i]);
-    }
-  }
-  return instrs_cpy;
 }
 
 
@@ -5397,22 +5402,36 @@ void InlineFuncCall::print(std::ostream &os) const {
   os << ")";
 }
 
+smt::expr InlineFuncCall::getTypeConstraints(const Function &f) const {
+  assert(numArgs() == func->numParams());
+  auto constr = getType() == func->getType() && func->getTypeConstraintsCall(f);
+  for (size_t i = 0; i < numArgs(); i++) {
+    constr &= argAt(i).getType() == func->paramAt(i).getType();
+  }
+  return constr;
+}
 std::unique_ptr<Instr> InlineFuncCall::dup(Function &f, const std::string &suffix) const {
   return make_unique<InlineFuncCall>(getName() + suffix, std::vector<Value*>(args), *func);
 }
+
 std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replacementInstrs(Function &f) const {
   assert(numArgs() == func->numParams());
-  auto replace_instrs = func->bodyInstrs(f, '_' + getName());
+  const auto suffix = '_' + getName();
+  std::vector<std::unique_ptr<Instr>> replace_instrs;
   Value *ret_val = nullptr;
 
-  for (auto I = replace_instrs.begin(); I != replace_instrs.end(); ++I) {
-    assert(dynamic_cast<const JumpInstr*>(I->get()) == nullptr);
-    for (size_t i = 0; i < std::min(func->numParams(), numArgs()); i++) {
-      (*I)->rauw(func->paramAt(i), *args[i]);
+  for (auto &I : func->getInstrs()) {
+    assert(dynamic_cast<const JumpInstr*>(&I) == nullptr);
+    auto &I_cpy = *replace_instrs.emplace_back(I.dup(f, suffix));
+    for (size_t i = 0; i < replace_instrs.size() - 1; i++) {
+      I_cpy.rauw(func->instrAt(i), *replace_instrs[i]);
     }
-    if (auto ret = dynamic_cast<const Return*>(I->get())) {
+    for (size_t i = 0; i < numArgs(); i++) {
+      I_cpy.rauw(func->paramAt(i), argAt(i));
+    }
+    if (auto ret = dynamic_cast<const Return*>(&I_cpy)) {
       ret_val = &ret->getVal();
-      replace_instrs.erase(I, replace_instrs.end());
+      replace_instrs.pop_back();
       break;
     }
   }
@@ -5441,6 +5460,12 @@ std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::
   return lambda;
 }
 
+std::pair<bool, uint64_t> Map::lambdaArgsContains(LambdaArg arg) const {
+  auto it = lambda_args.find(arg);
+  bool contains = it != lambda_args.end();
+  return {contains, contains ? std::distance(lambda_args.begin(), it) : -1};
+}
+
 DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
 DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
 
@@ -5450,16 +5475,15 @@ uint64_t Map::getMaxAccessSize() const {
 
 MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
   ByteAccessInfo info;
-  const Type &store_ty = lambda->getType();
+  const auto &store_ty = lambda->getType();
   info.hasIntByteAccess = store_ty.enforcePtrOrVectorType().isFalse();
   info.doesPtrStore = hasPtr(store_ty);
   info.byteSize = gcd(align, getCommonAccessSize(store_ty));
   info.subByteAccess = store_ty.maxSubBitAccess();
 
-  auto elem_arg = lambda_args.find(Elem);
-  if (elem_arg != lambda_args.end()) {
-    const Type &load_ty = lambda->paramTypeAt(std::distance(lambda_args.begin(), elem_arg));
-    assert(load_ty.eq_size(store_ty).isTrue());
+  auto [contains, idx] = lambdaArgsContains(Elem);
+  if (contains) {
+    const auto &load_ty = lambda->paramTypeAt(idx);
     info.hasIntByteAccess = info.hasIntByteAccess && load_ty.enforcePtrOrVectorType().isFalse();
     info.doesPtrLoad = hasPtr(load_ty);
     info.subByteAccess = std::max(info.subByteAccess, load_ty.maxSubBitAccess());
@@ -5492,12 +5516,23 @@ void Map::print(std::ostream &os) const {
 }
 
 StateValue Map::toSMT(State &s) const {
+  assert(lambda_args.size() == lambda->numParams());
   return {};
 }
 
 expr Map::getTypeConstraints(const Function &f) const {
-  return ptr->getType().enforcePtrType() &&
-         stop_idx->getType().enforceIntType();
+  assert(lambda_args.size() == lambda->numParams());
+  auto constr = ptr->getType().enforcePtrType() && stop_idx->getType().enforceIntType();
+  constr &= lambda->getTypeConstraintsCall(f);
+  
+  const auto &store_ty = lambda->getType();
+  constr &= store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1;
+  auto [contains, idx] = lambdaArgsContains(Elem);
+  if (contains) {
+    const Type &load_ty = lambda->paramTypeAt(idx);
+    constr &= load_ty.eq_size(store_ty);
+  }
+  return constr;
 }
 
 unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
@@ -5508,7 +5543,7 @@ unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsMemset(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  assert(lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue());
+  assert(lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1);
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = getName() + '_';
@@ -5528,7 +5563,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5606,7 +5641,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5711,7 +5746,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
     return replacementBBsMemset(f, next_bb);
   }
 

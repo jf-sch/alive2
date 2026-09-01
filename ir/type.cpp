@@ -25,7 +25,7 @@ namespace IR {
 VoidType Type::voidTy;
 
 unsigned Type::bytes() const {
-  return divide_up(bits(), bits_byte);
+  return divide_up(bits(), 8);
 }
 
 unsigned Type::np_bits(bool fromInt) const {
