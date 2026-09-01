@@ -3930,6 +3930,11 @@ void GEP::addIdx(uint64_t obj_size, Value &idx) {
   idxs.emplace_back(obj_size, &idx);
 }
 
+void GEP::addIdx(Type &obj_ty, Value &idx) {
+  assert(obj_ty.is_defined());
+  addIdx(obj_ty.bytes(), idx);
+}
+
 DEFINE_AS_RETZEROALIGN(GEP, getMaxAllocSize)
 DEFINE_AS_RETZERO(GEP, getMaxAccessSize)
 DEFINE_AS_EMPTYACCESS(GEP)
@@ -5348,7 +5353,8 @@ std::vector<std::unique_ptr<Instr>> InlineFunc::bodyInstrs(Function &f, const st
 
 
 std::vector<Value*> InlineFuncCall::operands() const {
-  std::vector<Value*> ops = {func};
+  std::vector<Value*> ops = func->operands();
+  ops.emplace_back(func);
   for (auto op : args) {
     ops.emplace_back(op);
   }
@@ -5445,7 +5451,7 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
 
   if (lambda_args & Elem) {
     const Type &load_ty = lambda->paramTypeAt((lambda_args & Idx) ? 1 : 0);
-    assert(load_ty.bits() == store_ty.bits());
+    assert(load_ty.eq_size(store_ty).isTrue());
     info.hasIntByteAccess = info.hasIntByteAccess && load_ty.enforcePtrOrVectorType().isFalse();
     info.doesPtrLoad = hasPtr(load_ty);
     info.subByteAccess = std::max(info.subByteAccess, load_ty.maxSubBitAccess());
@@ -5454,7 +5460,8 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
 }
 
 std::vector<Value*> Map::operands() const {
-  std::vector<Value*> ops = {lambda};
+  std::vector<Value*> ops = lambda->operands();
+  ops.emplace_back(lambda);
   for (auto op : {ptr, stop_idx}) {
     ops.emplace_back(op);
   }
@@ -5493,7 +5500,7 @@ unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsMemset(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  assert(lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte);
+  assert(lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue());
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = getName() + '_';
@@ -5513,7 +5520,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5551,7 +5558,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     }
     if (lambda_args & Elem) {
       auto &load_ty = lambda->paramTypeAt(args.size());
-      assert(load_ty.bits() == store_ty.bits());
+      assert(load_ty.eq_size(store_ty).isTrue());
       auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
       elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
       auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, *elem_gep, align);
@@ -5584,7 +5591,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5644,7 +5651,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
         }
         if (lambda_args & Elem) {
           auto &load_ty = lambda->paramTypeAt(args.size());
-          assert(load_ty.bits() == store_ty.bits());
+          assert(load_ty.eq_size(store_ty).isTrue());
           auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
           elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
           auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix3, *elem_gep, align);
@@ -5682,7 +5689,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.isIntType() && store_ty.bits() == bits_byte) {
+  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5725,7 +5732,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     }
     if (lambda_args & Elem) {
       auto &load_ty = lambda->paramTypeAt(args.size());
-      assert(load_ty.bits() == store_ty.bits());
+      assert(load_ty.eq_size(store_ty).isTrue());
       auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, gep, align);
       args.emplace_back(load_elem.get());
       map_bb->addInstr(std::move(load_elem));

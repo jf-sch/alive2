@@ -883,7 +883,7 @@ public:
   }
 
   void addIdx(uint64_t obj_size, Value &idx);
-  void addIdx(Type &obj_ty, Value &idx) { addIdx(obj_ty.bytes(), idx); };
+  void addIdx(Type &obj_ty, Value &idx);
   Value& getPtr() const { return *ptr; }
   auto& getIdxs() const { return idxs; }
   bool isInBounds() const { return inbounds; }

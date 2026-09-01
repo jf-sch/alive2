@@ -52,8 +52,10 @@ public:
 
   virtual smt::expr getTypeConstraints() const = 0;
   virtual smt::expr sizeVar() const;
+  bool is_defined() const;
   virtual smt::expr scalarSize() const;
   smt::expr operator==(const Type &rhs) const;
+  smt::expr eq_size(const Type &rhs) const;
   virtual void fixup(const smt::Model &m) = 0;
 
   virtual bool isIntType() const;

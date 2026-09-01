@@ -52,6 +52,11 @@ expr Type::sizeVar() const {
   return var("bw", var_bw_bits);
 }
 
+bool Type::is_defined() const {
+  uint64_t bits;
+  return sizeVar().isUInt(bits);
+}
+
 expr Type::scalarSize() const {
   return sizeVar();
 }
@@ -92,6 +97,10 @@ expr Type::operator==(const Type &b) const {
     return *rhs == *this;
 
   return false;
+}
+
+expr Type::eq_size(const Type &rhs) const {
+  return sizeVar() == rhs.sizeVar();
 }
 
 bool Type::isIntType() const {
