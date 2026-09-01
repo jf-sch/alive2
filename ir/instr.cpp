@@ -5422,14 +5422,21 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
 
 
 
-std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, Type *idx_type, Type *elem_type) {
-  auto lambda = make_unique<InlineFunc>(ret_type, "lambda");
-  if (idx_type != nullptr) {
-    lambda->addParam(make_unique<InlineFuncParam>(*idx_type, "idx"));
-  }
-  if (elem_type != nullptr) {
-    assert(elem_type->bits() == ret_type.bits());
-    lambda->addParam(make_unique<InlineFuncParam>(*elem_type, "elem"));
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::map<LambdaArg, Type*> &args_with_types, std::string &&name) {
+  auto lambda = make_unique<InlineFunc>(ret_type, std::move(name));
+  for (auto [arg, ty] : args_with_types) {
+    assert(ty != nullptr);
+    switch (arg) {
+    case Idx:
+      assert(ty->isIntType());
+      break;
+    case Elem:
+      assert(ty->eq_size(ret_type).isTrue());
+      break;
+    default:
+      assert(false);
+    }
+    lambda->addParam(make_unique<InlineFuncParam>(*ty, "LambdaArg::" + to_string(arg)));
   }
   return lambda;
 }
@@ -5449,8 +5456,9 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
   info.byteSize = gcd(align, getCommonAccessSize(store_ty));
   info.subByteAccess = store_ty.maxSubBitAccess();
 
-  if (lambda_args & Elem) {
-    const Type &load_ty = lambda->paramTypeAt((lambda_args & Idx) ? 1 : 0);
+  auto elem_arg = lambda_args.find(Elem);
+  if (elem_arg != lambda_args.end()) {
+    const Type &load_ty = lambda->paramTypeAt(std::distance(lambda_args.begin(), elem_arg));
     assert(load_ty.eq_size(store_ty).isTrue());
     info.hasIntByteAccess = info.hasIntByteAccess && load_ty.enforcePtrOrVectorType().isFalse();
     info.doesPtrLoad = hasPtr(load_ty);
@@ -5493,14 +5501,14 @@ expr Map::getTypeConstraints(const Function &f) const {
 }
 
 unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
-  return make_unique<Map>(getName() + suffix, unroll_cnt, *ptr, align, *stop_idx, *lambda, lambda_args, gep_inbounds, gep_nusw, gep_nuw);
+  return make_unique<Map>(getName() + suffix, unroll_cnt, *ptr, align, *stop_idx, *lambda, std::set(lambda_args), gep_inbounds, gep_nusw, gep_nuw);
 }
 
 
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsMemset(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  assert(lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue());
+  assert(lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue());
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = getName() + '_';
@@ -5520,7 +5528,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5553,18 +5561,25 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     prev_cond->replaceTargetWith(&sink, cond.get());
 
     std::vector<Value*> args;
-    if (lambda_args & Idx) {
-      args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
-    }
-    if (lambda_args & Elem) {
-      auto &load_ty = lambda->paramTypeAt(args.size());
-      assert(load_ty.eq_size(store_ty).isTrue());
-      auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-      elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
-      auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, *elem_gep, align);
-      args.emplace_back(load_elem.get());
-      cond->addInstr(std::move(elem_gep));
-      cond->addInstr(std::move(load_elem));
+    for (auto arg : lambda_args) {
+      switch (arg) {
+      case Idx:
+        args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+        break;
+      case Elem: {
+        auto &load_ty = lambda->paramTypeAt(args.size());
+        assert(load_ty.eq_size(store_ty).isTrue());
+        auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+        elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
+        auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, *elem_gep, align);
+        args.emplace_back(load_elem.get());
+        cond->addInstr(std::move(elem_gep));
+        cond->addInstr(std::move(load_elem));
+        break;
+      }
+      default:
+        assert(false);
+      }
     }
     auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
     elems.emplace_back(map_elem.get());
@@ -5591,7 +5606,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5646,18 +5661,25 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
         const uint64_t idx = base_idx + vec_idx;
 
         std::vector<Value*> args;
-        if (lambda_args & Idx) {
-          args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
-        }
-        if (lambda_args & Elem) {
-          auto &load_ty = lambda->paramTypeAt(args.size());
-          assert(load_ty.eq_size(store_ty).isTrue());
-          auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
-          elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
-          auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix3, *elem_gep, align);
-          args.emplace_back(load_elem.get());
-          map_range->addInstr(std::move(elem_gep));
-          map_range->addInstr(std::move(load_elem));
+        for (auto arg : lambda_args) {
+          switch (arg) {
+          case Idx:
+            args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+            break;
+          case Elem: {
+            auto &load_ty = lambda->paramTypeAt(args.size());
+            assert(load_ty.eq_size(store_ty).isTrue());
+            auto elem_gep = make_unique<GEP>(ptr->getType(), prefix + "elem_gep" + suffix3, *ptr, gep_inbounds, gep_nusw, gep_nuw);
+            elem_gep->addIdx(load_ty, f.getIntConst(idx, bits_for_offset));
+            auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix3, *elem_gep, align);
+            args.emplace_back(load_elem.get());
+            map_range->addInstr(std::move(elem_gep));
+            map_range->addInstr(std::move(load_elem));
+            break;
+          }
+          default:
+            assert(false);
+          }
         }
         auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix3, std::move(args), *lambda);
         elems.emplace_back(map_elem.get());
@@ -5689,7 +5711,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
   auto &store_ty = lambda->getType();
-  if (lambda_args == None && store_ty.enforceIntType(bits_byte).isTrue()) {
+  if (lambda_args.empty() && store_ty.enforceIntType(bits_byte).isTrue()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5727,15 +5749,22 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     map_bb->addInstr(std::move(elem_gep));
 
     std::vector<Value*> args;
-    if (lambda_args & Idx) {
-      args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
-    }
-    if (lambda_args & Elem) {
-      auto &load_ty = lambda->paramTypeAt(args.size());
-      assert(load_ty.eq_size(store_ty).isTrue());
-      auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, gep, align);
-      args.emplace_back(load_elem.get());
-      map_bb->addInstr(std::move(load_elem));
+    for (auto arg : lambda_args) {
+      switch (arg) {
+      case Idx:
+        args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
+        break;
+      case Elem: {
+        auto &load_ty = lambda->paramTypeAt(args.size());
+        assert(load_ty.eq_size(store_ty).isTrue());
+        auto load_elem = make_unique<Load>(load_ty, prefix + "load_elem" + suffix, gep, align);
+        args.emplace_back(load_elem.get());
+        map_bb->addInstr(std::move(load_elem));
+        break;
+      }
+      default:
+        assert(false);
+      }
     }
     auto map_elem = make_unique<InlineFuncCall>(prefix + "map_elem" + suffix, std::move(args), *lambda);
     Value &elem = *map_elem;
