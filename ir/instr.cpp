@@ -5455,7 +5455,7 @@ std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::
     default:
       assert(false);
     }
-    lambda->addParam(make_unique<InlineFuncParam>(*ty, "LambdaArg::" + to_string(arg)));
+    lambda->addParam(make_unique<InlineFuncParam>(*ty, "lambda_args::" + to_string(arg)));
   }
   return lambda;
 }
@@ -5512,11 +5512,21 @@ void Map::rauw(const Value &what, Value &with) {
 }
 
 void Map::print(std::ostream &os) const {
-  os << "map " << *ptr << " align " << align << " [" << '0' << ':' << *stop_idx << ':' << '1' << "] " << lambda->getName();
+  os << "map " << *ptr << " align " << align << " [" << '0' << " : " << *stop_idx << " : " << '1' << "] " << lambda->getName();
 }
 
 StateValue Map::toSMT(State &s) const {
   assert(lambda_args.size() == lambda->numParams());
+  auto &vbytes = s.getAndAddPoisonUB(*stop_idx, true).value;
+  if ((vbytes == 0).isTrue()) {
+    return {};
+  }
+  auto &vptr = s.getWellDefinedPtr(*ptr);
+  check_can_store(s, vptr);
+  if (lambda_args.contains(Elem)) {
+    check_can_load(s, vptr);
+  }
+  s.getMemory().mapLambda(vptr, vbytes, align, s.getUndefVars());
   return {};
 }
 
