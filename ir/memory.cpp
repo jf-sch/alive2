@@ -2542,13 +2542,16 @@ void Memory::memcpy(const expr &d, const expr &s, const expr &bytesize,
   }
 }
 
-void Memory::mapLambda(const expr &p, const expr &bytes, uint64_t align, const set<expr> &undef) {
+void Memory::mapLambda(const expr &p, const expr &bytes, uint64_t align, const set<expr> &undef,
+                       const std::set<MapLambdaArg> &lambda_args) {
   assert(!state->isInitializationPhase());
   assert(!memory_unused());
   Pointer ptr(*this, p);
 
   state->addUB(ptr.isDereferenceable(bytes, align, true, false, false));
-  // state->addUB(ptr.isDereferenceable(bytes, align, false, false, false));
+  if (lambda_args.contains(Elem)) {
+    state->addUB(ptr.isDereferenceable(bytes, align, false, false, false));
+  }
   expr offset = expr::mkQVar(0, Pointer::bitsShortOffset());
 }
 

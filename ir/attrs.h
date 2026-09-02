@@ -230,4 +230,8 @@ struct TailCallInfo final {
   friend std::ostream& operator<<(std::ostream &os, const TailCallInfo &tci);
 };
 
+
+
+enum MapLambdaArg { Idx, Elem };
+
 }

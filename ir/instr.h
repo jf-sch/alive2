@@ -1447,23 +1447,20 @@ public:
 
 
 class Map final : public MemInstr {
-public:
-  enum LambdaArg { Idx, Elem };
-
 private:
   uint64_t unroll_cnt;
   Value *ptr;
   uint64_t align;
   Value *stop_idx;    // idx_step = 1
   InlineFunc *lambda;
-  std::set<LambdaArg> lambda_args;
+  std::set<MapLambdaArg> lambda_args;
   bool gep_inbounds, gep_nusw, gep_nuw;
   bool idx_nsw, idx_nuw;
 
 public:
-  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, const std::map<LambdaArg, Type*> &args_with_types, std::string &&name = "lambda");
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args_with_types, std::string &&name = "lambda");
 
-  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, std::set<LambdaArg> &&lambda_args,
+  Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, std::set<MapLambdaArg> &&lambda_args,
       bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)
     : MemInstr(Type::voidTy, std::move(name)), unroll_cnt(unroll_cnt), ptr(&ptr), align(align), stop_idx(&stop_idx), lambda(&lambda), lambda_args(std::move(lambda_args)),
       gep_inbounds(gep_inbounds), gep_nusw(gep_nusw), gep_nuw(gep_nuw), idx_nsw(false), idx_nuw(false) {};
@@ -1474,7 +1471,7 @@ public:
   auto& getLambda() const { return *lambda; }
   const auto& getLambdaArgs() const { return lambda_args; }
   auto lambdaArgAt(size_t idx, bool reversed = false) const { return *std::next(lambda_args.begin(), reversed ? (lambda_args.size() - idx - 1) : idx); }
-  std::pair<bool, uint64_t> lambdaArgsContains(LambdaArg arg) const;
+  std::pair<bool, uint64_t> lambdaArgsContains(MapLambdaArg arg) const;
   auto getAlign() const { return align; }
   auto getUnrollCnt() const { return unroll_cnt; }
 

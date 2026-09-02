@@ -5441,7 +5441,7 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
 
 
 
-std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::map<LambdaArg, Type*> &args_with_types, std::string &&name) {
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args_with_types, std::string &&name) {
   auto lambda = make_unique<InlineFunc>(ret_type, std::move(name));
   for (auto [arg, ty] : args_with_types) {
     assert(ty != nullptr);
@@ -5460,7 +5460,7 @@ std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::
   return lambda;
 }
 
-std::pair<bool, uint64_t> Map::lambdaArgsContains(LambdaArg arg) const {
+std::pair<bool, uint64_t> Map::lambdaArgsContains(MapLambdaArg arg) const {
   auto it = lambda_args.find(arg);
   bool contains = it != lambda_args.end();
   return {contains, contains ? std::distance(lambda_args.begin(), it) : -1};
@@ -5526,7 +5526,7 @@ StateValue Map::toSMT(State &s) const {
   if (lambda_args.contains(Elem)) {
     check_can_load(s, vptr);
   }
-  s.getMemory().mapLambda(vptr, vbytes, align, s.getUndefVars());
+  s.getMemory().mapLambda(vptr, vbytes, align, s.getUndefVars(), lambda_args);
   return {};
 }
 
