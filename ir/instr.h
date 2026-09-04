@@ -1386,18 +1386,18 @@ public:
     : Instr(type, std::move(name)) {};
 
   size_t numParams() const { return params.size(); }
-  InlineFuncParam &paramAt(size_t idx, bool reversed = false) const { return *params.at(reversed ? (instrs.size() - idx - 1) : idx); }
-  Type &paramTypeAt(size_t idx, bool reversed = false) const { return paramAt(idx, reversed).getType(); }
+  InlineFuncParam& paramAt(size_t idx, bool reversed = false) const { return *params.at(reversed ? (instrs.size() - idx - 1) : idx); }
+  Type& paramTypeAt(size_t idx, bool reversed = false) const { return paramAt(idx, reversed).getType(); }
   util::const_strip_unique_ptr<decltype(params)> getParams() const { return params; }
-  void addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front = false);
+  InlineFuncParam& addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front = false);
   void delParam(const InlineFuncParam *i);
 
   size_t numInstrs() const { return instrs.size(); }
   Instr& instrAt(size_t idx, bool reversed = false) const { return *instrs.at(reversed ? (instrs.size() - idx - 1) : idx); }
   Instr& instrBack() const { return *instrs.back(); }
   util::const_strip_unique_ptr<decltype(instrs)> getInstrs() const { return instrs; }
-  void addInstr(std::unique_ptr<Instr> &&i, bool push_front = false);
-  void addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before = true);
+  Instr& addInstr(std::unique_ptr<Instr> &&i, bool push_front = false);
+  Instr* addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before = true);
   void delInstr(const Instr *i);
 
   Return* getReturn() const;

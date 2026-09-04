@@ -5212,12 +5212,12 @@ Value* isNoOp(const Value &v) {
 
 
 
-void InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front) {
+InlineFuncParam& InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
-    params.emplace(params.begin(), std::move(i));
+    return **params.emplace(params.begin(), std::move(i));
   } else {
-    params.emplace_back(std::move(i));
+    return *params.emplace_back(std::move(i));
   }
 }
 void InlineFunc::delParam(const InlineFuncParam *i) {
@@ -5230,15 +5230,15 @@ void InlineFunc::delParam(const InlineFuncParam *i) {
   }
 }
 
-void InlineFunc::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
+Instr& InlineFunc::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
-    instrs.emplace(instrs.begin(), std::move(i));
+    return **instrs.emplace(instrs.begin(), std::move(i));
   } else {
-    instrs.emplace_back(std::move(i));
+    return *instrs.emplace_back(std::move(i));
   }
 }
-void InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
+Instr* InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
   own_values.insert(i.get());
   for (auto I = instrs.begin();; ++I) {
     assert(I != instrs.end());
@@ -5246,10 +5246,11 @@ void InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool
       if (!before) {
         ++I;
       }
-      instrs.emplace(I, std::move(i));
+      return (*instrs.emplace(I, std::move(i))).get();
       break;
     }
   }
+  return nullptr;
 }
 void InlineFunc::delInstr(const Instr *i) {
   for (auto I = instrs.begin(), E = instrs.end(); I != E; ++I) {
@@ -5307,6 +5308,7 @@ void InlineFunc::print(std::ostream &os) const {
   auto I = params.begin(), E = params.end();
   if (I != E) {
     (*I)->print(os);
+    ++I;
   }
   for (; I != E; ++I) {
     os << ", ";
@@ -5340,17 +5342,15 @@ smt::expr InlineFunc::getTypeConstraintsCall(const Function &f) const {
 
 std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
   auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
-  for (auto &i : params) {
-    new_func->addParam(i->dup(suffix));
-  }
   for (auto &i : instrs) {
-    new_func->addInstr(i->dup(f, suffix));
+    auto &i_cpy = new_func->addInstr(i->dup(f, suffix));
+    for (size_t i = 0; i < new_func->numInstrs() - 1; i++) {
+      i_cpy.rauw(instrAt(i), new_func->instrAt(i));
+    }
   }
-  for (size_t i = 0; i < numParams(); i++) {
-    new_func->rauw(paramAt(i), new_func->paramAt(i));
-  }
-  for (size_t i = 0; i < numInstrs(); i++) {
-    new_func->rauw(instrAt(i), new_func->instrAt(i));
+  for (auto &i : params) {
+    auto &i_cpy = new_func->addParam(i->dup(suffix));
+    new_func->rauw(*i, i_cpy);
   }
   return new_func;
 }
@@ -5393,6 +5393,7 @@ void InlineFuncCall::print(std::ostream &os) const {
   auto I = args.begin(), E = args.end();
   if (I != E) {
     (*I)->print(os);
+    ++I;
   }
   for (; I != E; ++I) {
     os << ", ";
@@ -5454,7 +5455,7 @@ std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::
     default:
       assert(false);
     }
-    lambda->addParam(make_unique<InlineFuncParam>(*ty, "lambda_args::" + to_string(arg)));
+    lambda->addParam(make_unique<InlineFuncParam>(*ty, "map_lambda_arg::" + to_string(arg)));
   }
   return lambda;
 }
