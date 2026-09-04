@@ -352,7 +352,7 @@ public:
               bool move);
 
   void mapLambda(const smt::expr &p, const smt::expr &bytes, uint64_t align, const std::set<smt::expr> &undef,
-                 const std::set<MapLambdaArg> &lambda_args);
+                 const Type &lambda_ret_type, const std::map<MapLambdaArg, Type*> &lambda_args);
 
   // full copy of memory blocks
   void copy(const Pointer &src, const Pointer &dst);

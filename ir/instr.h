@@ -1458,7 +1458,7 @@ private:
   bool idx_nsw, idx_nuw;
 
 public:
-  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args_with_types, std::string &&name = "lambda");
+  static std::unique_ptr<InlineFunc> get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args, std::string &&name = "lambda");
 
   Map(std::string &&name, uint64_t unroll_cnt, Value &ptr, uint64_t align, Value &stop_idx, InlineFunc &lambda, std::set<MapLambdaArg> &&lambda_args,
       bool gep_inbounds = true, bool gep_nusw = false, bool gep_nuw = false)

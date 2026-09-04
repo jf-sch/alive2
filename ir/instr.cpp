@@ -5381,12 +5381,11 @@ bool InlineFuncCall::hasSideEffects() const {
 }
 void InlineFuncCall::rauw(const Value &what, Value &with) {
   if (func == &what) {
-    auto new_func = dynamic_cast<InlineFunc*>(&with);
-    assert(new_func != nullptr);
-    func = new_func;
+    func = dynamic_cast<InlineFunc*>(&with);
+    assert(func != nullptr);
   }
-  for (size_t i = 0; i < args.size(); i++) {
-    RAUW(args[i]);
+  for (auto &arg : args) {
+    RAUW(arg);
   }
 }
 void InlineFuncCall::print(std::ostream &os) const {
@@ -5441,9 +5440,9 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
 
 
 
-std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args_with_types, std::string &&name) {
+std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::map<MapLambdaArg, Type*> &args, std::string &&name) {
   auto lambda = make_unique<InlineFunc>(ret_type, std::move(name));
-  for (auto [arg, ty] : args_with_types) {
+  for (auto [arg, ty] : args) {
     assert(ty != nullptr);
     switch (arg) {
     case Idx:
@@ -5508,13 +5507,11 @@ std::vector<Value*> Map::operands() const {
 
 void Map::rauw(const Value &what, Value &with) {
   if (lambda == &what) {
-    auto new_lambda = dynamic_cast<InlineFunc*>(&with);
-    assert(new_lambda != nullptr);
-    lambda = new_lambda;
+    auto lambda = dynamic_cast<InlineFunc*>(&with);
+    assert(lambda != nullptr);
   }
-  for (auto op : {ptr, stop_idx}) {
-    RAUW(op);
-  }
+  RAUW(ptr);
+  RAUW(stop_idx);
 }
 
 void Map::print(std::ostream &os) const {
@@ -5532,7 +5529,13 @@ StateValue Map::toSMT(State &s) const {
   if (lambda_args.contains(Elem)) {
     check_can_load(s, vptr);
   }
-  s.getMemory().mapLambda(vptr, vbytes, align, s.getUndefVars(), lambda_args);
+  std::map<MapLambdaArg, Type*> args_with_type;
+  size_t i = 0;
+  for (auto arg : lambda_args) {
+    args_with_type.emplace(arg, &lambda->paramAt(i).getType());
+    i++;
+  }
+  s.getMemory().mapLambda(vptr, vbytes, align, s.getUndefVars(), lambda->getSMTFunc(), lambda->getType(), args_with_type);
   return {};
 }
 
@@ -5540,7 +5543,7 @@ expr Map::getTypeConstraints(const Function &f) const {
   assert(lambda_args.size() == lambda->numParams());
   auto constr = ptr->getType().enforcePtrType() && stop_idx->getType().enforceIntType();
   constr &= lambda->getTypeConstraintsCall(f);
-  
+
   const auto &store_ty = lambda->getType();
   constr &= store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1;
   auto [contains, idx] = lambdaArgsContains(Elem);
