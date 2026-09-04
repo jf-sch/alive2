@@ -1474,6 +1474,7 @@ public:
   std::pair<bool, uint64_t> lambdaArgsContains(MapLambdaArg arg) const;
   auto getAlign() const { return align; }
   auto getUnrollCnt() const { return unroll_cnt; }
+  bool representableAsMemset() const;
 
   std::pair<uint64_t, uint64_t> getMaxAllocSize() const override;
   uint64_t getMaxAccessSize() const override;

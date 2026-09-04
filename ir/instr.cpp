@@ -5466,6 +5466,12 @@ std::pair<bool, uint64_t> Map::lambdaArgsContains(MapLambdaArg arg) const {
   return {contains, contains ? std::distance(lambda_args.begin(), it) : -1};
 }
 
+bool Map::representableAsMemset() const {
+  assert(lambda_args.size() == lambda->numParams());
+  auto &store_ty = lambda->getType();
+  return lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1;
+}
+
 DEFINE_AS_RETZEROALIGN(Map, getMaxAllocSize)
 DEFINE_AS_RETZERO(Map, getMaxGEPOffset)
 
@@ -5552,8 +5558,7 @@ unique_ptr<Instr> Map::dup(Function &f, const std::string &suffix) const {
 
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsMemset(Function &f, const BasicBlock &next_bb) const {
-  auto &store_ty = lambda->getType();
-  assert(lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1);
+  assert(representableAsMemset());
 
   std::vector<std::unique_ptr<BasicBlock>> replace_bbs;
   const auto prefix = getName() + '_';
@@ -5572,8 +5577,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsSingleStore(Function &f, const BasicBlock &next_bb) const {
-  auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
+  if (representableAsMemset()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5581,6 +5585,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   const auto prefix = getName() + '_';
   auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
+  auto &store_ty = lambda->getType();
   auto &sink = f.getSinkBB();
 
   BasicBlock *prev_cond;
@@ -5650,8 +5655,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 }
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsBinTree(Function &f, const BasicBlock &next_bb) const {
-  auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
+  if (representableAsMemset()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5659,6 +5663,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   const auto prefix = getName() + '_';
   auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
+  auto &store_ty = lambda->getType();
   const uint64_t unroll_cnt_bit_floor = std::bit_floor(unroll_cnt);
   const uint64_t leaf_tree_nodes = unroll_cnt_bit_floor << 1u;
 
@@ -5755,8 +5760,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
 }
 
 std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacementBBsAliasAware(Function &f, const BasicBlock &next_bb) const {
-  auto &store_ty = lambda->getType();
-  if (lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1) {
+  if (representableAsMemset()) {
     return replacementBBsMemset(f, next_bb);
   }
 
@@ -5764,6 +5768,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
   const auto prefix = getName() + '_';
   auto &bool_ty = IntType::get(1);
   auto &stop_idx_ty = stop_idx->getType();
+  auto &store_ty = lambda->getType();
   auto &sink = f.getSinkBB();
 
   BasicBlock *prev_map;
