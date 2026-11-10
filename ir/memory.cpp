@@ -2632,18 +2632,6 @@ void Memory::copy(const Pointer &src, const Pointer &dst) {
 
   unsigned has_bv_val = 0;
   auto offset = expr::mkUInt(0, Pointer::bitsShortOffset());
-
-    if (!local) {
-      // auto &set = stored_pointers[bid];
-      auto &set = stored_pointers.at(bid);
-      set.first.clear();
-      set.second = true;
-    }
-    blk.type |= new_ty;
-    blk.undef.insert(undef.begin(), undef.end());
-  };
-
-  access(ptr, bytes.zextOrTrunc(bits_size_t), align, true, fn);
   DisjointExpr val(Byte::mkPoisonByte(*this)());
 
   if (!dst_local)
