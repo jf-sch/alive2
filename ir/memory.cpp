@@ -2554,6 +2554,61 @@ void Memory::mapLambda(const expr &p, const expr &bytes, uint64_t align, const s
   }
   const expr offset = expr::mkQVar(0, Pointer::bitsShortOffset());
   const expr ptr_offset = offset - ptr.getShortOffset();
+  const auto idx_arg_it = lambda_args.find(Idx);
+  expr ptr_offset_resized = (idx_arg_it != lambda_args.end()) ? ptr_offset.sextOrTrunc(idx_arg_it->second->bits()) : ptr_offset;
+  const StateValue idx_val(std::move(ptr_offset_resized), true);
+
+  auto fn = [&](MemBlock &blk, const Pointer &ptr, unsigned bid, bool local, expr &&cond) {
+    const expr orig_val = ::raw_load(blk.val, offset);
+
+    std::vector<StateValue> args;
+    for (auto [arg, type] : lambda_args) {
+      switch (arg) {
+      case Idx:
+        args.emplace_back(idx_val);
+        break;
+      case Elem: {
+        const Byte orig_byte(*this, expr(orig_val));
+        const auto elem_val = bytesToValue(*this, {std::move(orig_byte)}, *type);
+        args.emplace_back(std::move(elem_val));
+        break;
+      }
+      default:
+        assert(false);
+      }
+    }
+    // auto new_ty = data_type({{0, new_val}}, false);
+
+    // optimization: full rewrite
+    if (bytes.eq(ptr.blockSizeAligned()) && false) {
+      // blk.val = expr::mkLambda(offset, "#offset",
+      //                          mk_block_if(cond, new_val, std::move(orig_val)));
+
+      if (cond.isTrue()) {
+        blk.undef.clear();
+        // blk.type = new_ty;
+      }
+    } else {
+      // offset in [ptr, ptr+sz)
+      auto offset_cond = offset.uge(ptr.getShortOffset()) &&
+                         offset.ult((ptr + bytes).getShortOffset());
+
+      // blk.val = expr::mkLambda(offset, "#offset",
+      //                          mk_block_if(cond && offset_cond, new_val, std::move(orig_val)));
+    }
+    // const array -> BV
+    blk.val.isConstArray(blk.val);
+
+    if (!local) {
+      auto &set = stored_pointers[bid];
+      set.first.clear();
+      set.second = true;
+    }
+    // blk.type |= new_ty;
+    blk.undef.insert(undef.begin(), undef.end());
+  };
+
+  access(ptr, bytes.zextOrTrunc(bits_size_t), align, true, fn);
 }
 
 void Memory::copy(const Pointer &src, const Pointer &dst) {
@@ -2577,6 +2632,18 @@ void Memory::copy(const Pointer &src, const Pointer &dst) {
 
   unsigned has_bv_val = 0;
   auto offset = expr::mkUInt(0, Pointer::bitsShortOffset());
+
+    if (!local) {
+      // auto &set = stored_pointers[bid];
+      auto &set = stored_pointers.at(bid);
+      set.first.clear();
+      set.second = true;
+    }
+    blk.type |= new_ty;
+    blk.undef.insert(undef.begin(), undef.end());
+  };
+
+  access(ptr, bytes.zextOrTrunc(bits_size_t), align, true, fn);
   DisjointExpr val(Byte::mkPoisonByte(*this)());
 
   if (!dst_local)
