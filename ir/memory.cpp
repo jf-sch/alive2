@@ -2552,8 +2552,8 @@ void Memory::mapLambda(const expr &p, const expr &bytes, uint64_t align, const s
   if (lambda_args.contains(Elem)) {
     state->addUB(ptr.isDereferenceable(bytes, align, false, false, false));
   }
-  expr offset = expr::mkQVar(0, Pointer::bitsShortOffset());
-  expr ptr_offset = offset - ptr.getShortOffset();
+  const expr offset = expr::mkQVar(0, Pointer::bitsShortOffset());
+  const expr ptr_offset = offset - ptr.getShortOffset();
 }
 
 void Memory::copy(const Pointer &src, const Pointer &dst) {

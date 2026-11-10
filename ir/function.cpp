@@ -124,7 +124,7 @@ void BasicBlock::transferInstrs(BasicBlock &tgt_bb) {
 void BasicBlock::expandInlineFuncs(Function &f) {
   for (auto I = m_instrs.end(); I != m_instrs.begin();) {
     --I;
-    if (auto call = dynamic_cast<InlineFuncCall*>(I->get())) {
+    if (const auto *const call = dynamic_cast<InlineFuncCall*>(I->get())) {
       auto instrs_and_ret = call->replacementInstrs(f);
       auto &replace_instrs = instrs_and_ret.first;
       auto &replace_val = instrs_and_ret.second;

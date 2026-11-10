@@ -5212,7 +5212,7 @@ Value* isNoOp(const Value &v) {
 
 
 
-InlineFuncParam& InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, bool push_front) {
+InlineFuncParam& InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, const bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
     return **params.emplace(params.begin(), std::move(i));
@@ -5220,8 +5220,9 @@ InlineFuncParam& InlineFunc::addParam(std::unique_ptr<InlineFuncParam> &&i, bool
     return *params.emplace_back(std::move(i));
   }
 }
-void InlineFunc::delParam(const InlineFuncParam *i) {
-  for (auto I = params.begin(), E = params.end(); I != E; ++I) {
+void InlineFunc::delParam(const InlineFuncParam *const i) {
+  const auto E = params.end();
+  for (auto I = params.begin(); I != E; ++I) {
     if (I->get() == i) {
       params.erase(I);
       own_values.erase(i);
@@ -5230,7 +5231,7 @@ void InlineFunc::delParam(const InlineFuncParam *i) {
   }
 }
 
-Instr& InlineFunc::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
+Instr& InlineFunc::addInstr(std::unique_ptr<Instr> &&i, const bool push_front) {
   own_values.insert(i.get());
   if (push_front) {
     return **instrs.emplace(instrs.begin(), std::move(i));
@@ -5238,22 +5239,23 @@ Instr& InlineFunc::addInstr(std::unique_ptr<Instr> &&i, bool push_front) {
     return *instrs.emplace_back(std::move(i));
   }
 }
-Instr* InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *other, bool before) {
+Instr* InlineFunc::addInstrAt(std::unique_ptr<Instr> &&i, const Instr *const other, const bool before) {
   own_values.insert(i.get());
-  for (auto I = instrs.begin();; ++I) {
-    assert(I != instrs.end());
+  const auto E = instrs.end();
+  for (auto I = instrs.begin(); I != E; ++I) {
     if (I->get() == other) {
       if (!before) {
         ++I;
       }
       return (*instrs.emplace(I, std::move(i))).get();
-      break;
     }
   }
+  assert(false);
   return nullptr;
 }
-void InlineFunc::delInstr(const Instr *i) {
-  for (auto I = instrs.begin(), E = instrs.end(); I != E; ++I) {
+void InlineFunc::delInstr(const Instr *const i) {
+  const auto E = instrs.end();
+  for (auto I = instrs.begin(); I != E; ++I) {
     if (I->get() == i) {
       instrs.erase(I);
       own_values.erase(i);
@@ -5263,22 +5265,22 @@ void InlineFunc::delInstr(const Instr *i) {
 }
 
 Return* InlineFunc::getReturn() const {
-  for (auto &I : instrs) {
-    if (auto ret = dynamic_cast<Return*>(I.get())) {
+  for (const auto &I : instrs) {
+    if (auto *const ret = dynamic_cast<Return*>(I.get())) {
       return ret;
     }
   }
   return nullptr;
 }
 Type& InlineFunc::getReturnType() const {
-  auto ret_val = getReturn();
+  const auto *const ret_val = getReturn();
   return (ret_val != nullptr) ? ret_val->getType() : Type::voidTy;
 }
 
 InlineFunc::UsersTy InlineFunc::getUsers() const {
   UsersTy users;
-  for (auto &I : instrs) {
-    for (auto op : I->operands()) {
+  for (const auto &I : instrs) {
+    for (const auto *const op : I->operands()) {
       if (I.get() != op) {
         users[op].emplace(I.get());
       }
@@ -5288,8 +5290,8 @@ InlineFunc::UsersTy InlineFunc::getUsers() const {
 }
 std::vector<Value*> InlineFunc::operands() const {
   std::vector<Value*> ops;
-  for (auto &I : instrs) {
-    for (auto op : I->operands()) {
+  for (const auto &I : instrs) {
+    for (auto *const op : I->operands()) {
       if (!own_values.contains(op)) {
         ops.emplace_back(op);
       }
@@ -5305,7 +5307,8 @@ void InlineFunc::rauw(const Value &what, Value &with) {
 }
 void InlineFunc::print(std::ostream &os) const {
   os << "inline_func_decl " << getType() << ' ' << getName() << '(';
-  auto I = params.begin(), E = params.end();
+  const auto E = params.end();
+  auto I = params.begin();
   if (I != E) {
     (*I)->print(os);
     ++I;
@@ -5315,7 +5318,7 @@ void InlineFunc::print(std::ostream &os) const {
     (*I)->print(os);
   }
   os << ") {\n";
-  for (auto &i : instrs) {
+  for (const auto &i : instrs) {
     os << "  ";
     i->print(os);
     os << '\n';
@@ -5325,12 +5328,12 @@ void InlineFunc::print(std::ostream &os) const {
 
 smt::expr InlineFunc::getTypeConstraintsCall(const Function &f) const {
   auto constr = getType() == getReturnType();
-  for (auto &i : params) {
+  for (const auto &i : params) {
     constr &= i->getTypeConstraints();
   }
-  for (auto &i : instrs) {
+  for (const auto &i : instrs) {
     assert(dynamic_cast<const JumpInstr*>(i.get()) == nullptr);
-    if (auto ret = dynamic_cast<const Return*>(i.get())) {
+    if (const auto *const ret = dynamic_cast<const Return*>(i.get())) {
       constr &= ret->getType().getTypeConstraints() &&
                 ret->getType() == ret->getVal().getType();
       break;
@@ -5342,13 +5345,13 @@ smt::expr InlineFunc::getTypeConstraintsCall(const Function &f) const {
 
 std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) const {
   auto new_func = make_unique<InlineFunc>(getType(), getName() + suffix);
-  for (auto &i : instrs) {
+  for (const auto &i : instrs) {
     auto &i_cpy = new_func->addInstr(i->dup(f, suffix));
     for (size_t i = 0; i < new_func->numInstrs() - 1; i++) {
       i_cpy.rauw(instrAt(i), new_func->instrAt(i));
     }
   }
-  for (auto &i : params) {
+  for (const auto &i : params) {
     auto &i_cpy = new_func->addParam(i->dup(suffix));
     new_func->rauw(*i, i_cpy);
   }
@@ -5360,21 +5363,21 @@ std::unique_ptr<Instr> InlineFunc::dup(Function &f, const std::string &suffix) c
 std::vector<Value*> InlineFuncCall::operands() const {
   std::vector<Value*> ops = func->operands();
   ops.emplace_back(func);
-  for (auto op : args) {
+  for (auto *const op : args) {
     ops.emplace_back(op);
   }
   return ops;
 }
 bool InlineFuncCall::propagatesPoison() const {
   bool poison = false;
-  for (auto &i : func->getInstrs()) {
+  for (const auto &i : func->getInstrs()) {
     poison = poison || i.propagatesPoison();
   }
   return poison;
 }
 bool InlineFuncCall::hasSideEffects() const {
   bool side_effects = false;
-  for (auto &i : func->getInstrs()) {
+  for (const auto &i : func->getInstrs()) {
     side_effects = side_effects || i.hasSideEffects();
   }
   return side_effects;
@@ -5383,6 +5386,7 @@ void InlineFuncCall::rauw(const Value &what, Value &with) {
   if (func == &what) {
     func = dynamic_cast<InlineFunc*>(&with);
     assert(func != nullptr);
+    return;
   }
   for (auto &arg : args) {
     RAUW(arg);
@@ -5390,7 +5394,8 @@ void InlineFuncCall::rauw(const Value &what, Value &with) {
 }
 void InlineFuncCall::print(std::ostream &os) const {
   os << "inline_func_call " << getName() << " = " << func->getName() << '(';
-  auto I = args.begin(), E = args.end();
+  const auto E = args.end();
+  auto I = args.begin();
   if (I != E) {
     (*I)->print(os);
     ++I;
@@ -5420,7 +5425,7 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
   std::vector<std::unique_ptr<Instr>> replace_instrs;
   Value *ret_val = nullptr;
 
-  for (auto &I : func->getInstrs()) {
+  for (const auto &I : func->getInstrs()) {
     assert(dynamic_cast<const JumpInstr*>(&I) == nullptr);
     auto &I_cpy = *replace_instrs.emplace_back(I.dup(f, suffix));
     for (size_t i = 0; i < replace_instrs.size() - 1; i++) {
@@ -5429,7 +5434,7 @@ std::pair<std::vector<std::unique_ptr<Instr>>, Value&> InlineFuncCall::replaceme
     for (size_t i = 0; i < numArgs(); i++) {
       I_cpy.rauw(func->paramAt(i), argAt(i));
     }
-    if (auto ret = dynamic_cast<const Return*>(&I_cpy)) {
+    if (const auto *const ret = dynamic_cast<const Return*>(&I_cpy)) {
       ret_val = &ret->getVal();
       replace_instrs.pop_back();
       break;
@@ -5461,14 +5466,14 @@ std::unique_ptr<InlineFunc> Map::get_lambda_template(Type &ret_type, const std::
 }
 
 std::pair<bool, uint64_t> Map::lambdaArgsContains(MapLambdaArg arg) const {
-  auto it = lambda_args.find(arg);
-  bool contains = it != lambda_args.end();
+  const auto it = lambda_args.find(arg);
+  const bool contains = it != lambda_args.end();
   return {contains, contains ? std::distance(lambda_args.begin(), it) : -1};
 }
 
 bool Map::representableAsMemset() const {
   assert(lambda_args.size() == lambda->numParams());
-  auto &store_ty = lambda->getType();
+  const auto &store_ty = lambda->getType();
   return lambda_args.empty() && store_ty.isIntType() && store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1;
 }
 
@@ -5487,7 +5492,7 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
   info.byteSize = gcd(align, getCommonAccessSize(store_ty));
   info.subByteAccess = store_ty.maxSubBitAccess();
 
-  auto [contains, idx] = lambdaArgsContains(Elem);
+  const auto [contains, idx] = lambdaArgsContains(Elem);
   if (contains) {
     const auto &load_ty = lambda->paramTypeAt(idx);
     info.hasIntByteAccess = info.hasIntByteAccess && load_ty.enforcePtrOrVectorType().isFalse();
@@ -5500,7 +5505,7 @@ MemInstr::ByteAccessInfo Map::getByteAccessInfo() const {
 std::vector<Value*> Map::operands() const {
   std::vector<Value*> ops = lambda->operands();
   ops.emplace_back(lambda);
-  for (auto op : {ptr, stop_idx}) {
+  for (auto *const op : {ptr, stop_idx}) {
     ops.emplace_back(op);
   }
   return ops;
@@ -5508,8 +5513,9 @@ std::vector<Value*> Map::operands() const {
 
 void Map::rauw(const Value &what, Value &with) {
   if (lambda == &what) {
-    auto lambda = dynamic_cast<InlineFunc*>(&with);
+    lambda = dynamic_cast<InlineFunc*>(&with);
     assert(lambda != nullptr);
+    return;
   }
   RAUW(ptr);
   RAUW(stop_idx);
@@ -5521,18 +5527,18 @@ void Map::print(std::ostream &os) const {
 
 StateValue Map::toSMT(State &s) const {
   assert(lambda_args.size() == lambda->numParams());
-  auto &vbytes = s.getAndAddPoisonUB(*stop_idx, true).value;
+  const auto &vbytes = s.getAndAddPoisonUB(*stop_idx, true).value;
   if ((vbytes == 0).isTrue()) {
     return {};
   }
-  auto &vptr = s.getWellDefinedPtr(*ptr);
+  const auto &vptr = s.getWellDefinedPtr(*ptr);
   check_can_store(s, vptr);
   if (lambda_args.contains(Elem)) {
     check_can_load(s, vptr);
   }
   std::map<MapLambdaArg, Type*> args_with_type;
   size_t i = 0;
-  for (auto arg : lambda_args) {
+  for (const auto arg : lambda_args) {
     args_with_type.emplace(arg, &lambda->paramAt(i).getType());
     i++;
   }
@@ -5547,10 +5553,21 @@ expr Map::getTypeConstraints(const Function &f) const {
 
   const auto &store_ty = lambda->getType();
   constr &= store_ty.is_defined() && Memory::getStoreByteSize(store_ty) == 1;
-  auto [contains, idx] = lambdaArgsContains(Elem);
-  if (contains) {
-    const Type &load_ty = lambda->paramTypeAt(idx);
-    constr &= load_ty.eq_size(store_ty);
+
+  size_t i = 0;
+  for (const auto arg : lambda_args) {
+    const auto& arg_ty = lambda->paramTypeAt(i);
+    switch (arg) {
+    case Idx:
+      constr &= arg_ty.isIntType();
+      break;
+    case Elem:
+      constr &= arg_ty.eq_size(store_ty);
+      break;
+    default:
+      assert(false);
+    }
+    i++;
   }
   return constr;
 }
@@ -5615,7 +5632,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     prev_cond->replaceTargetWith(&sink, cond.get());
 
     std::vector<Value*> args;
-    for (auto arg : lambda_args) {
+    for (const auto arg : lambda_args) {
       switch (arg) {
       case Idx:
         args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
@@ -5715,7 +5732,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
         const uint64_t idx = base_idx + vec_idx;
 
         std::vector<Value*> args;
-        for (auto arg : lambda_args) {
+        for (const auto arg : lambda_args) {
           switch (arg) {
           case Idx:
             args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
@@ -5803,7 +5820,7 @@ std::pair<std::vector<std::unique_ptr<BasicBlock>>, BasicBlock&> Map::replacemen
     map_bb->addInstr(std::move(elem_gep));
 
     std::vector<Value*> args;
-    for (auto arg : lambda_args) {
+    for (const auto arg : lambda_args) {
       switch (arg) {
       case Idx:
         args.emplace_back(&f.getIntConst(idx, lambda->paramTypeAt(args.size())));
